@@ -23,7 +23,3 @@ The core innovation treats VAE training as a cooperative game per epoch:
 * **Payoff:** The reconstruction performance of the VAE given a specific subset (coalition) of features.
 
 ## References
-
-[1] Anonymous, "When Encoders Should Stay Simple: An Empirical Analysis of Architectures for Variational Autoencoders," submitted for review at the *Int. Conf. on Learning Representations (ICLR)*, Dec. 2025. [Online]. Available: [OpenReview](https://openreview.net/forum?id=2hTLJEgCbv)
-
-[2] A. A. Alemi, B. Poole, I. Fischer, J. V. Dillon, R. A. Saurous, and K. Murphy, "An information-theoretic analysis of deep latent-variable models," in *Proc. Int. Conf. on Learning Representations (ICLR)*, 2018. [Online]. Available: [OpenReview](https://openreview.net/pdf?id=H1rRWl-Cb)
