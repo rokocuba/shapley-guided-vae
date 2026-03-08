@@ -22,4 +22,14 @@ The core innovation treats VAE training as a cooperative game per epoch:
 * **Players:** The 11 individual input features.
 * **Payoff:** The reconstruction performance of the VAE given a specific subset (coalition) of features.
 
+## Dataset
+
+This project uses the Wine Quality dataset:
+
+P. Cortez, A. Cerdeira, F. Almeida, T. Matos and J. Reis.  
+*Modeling wine preferences by data mining from physicochemical properties.*  
+Decision Support Systems, 47(4):547–553, 2009.
+
+Dataset available from the UCI Machine Learning Repository.
+
 ## References
