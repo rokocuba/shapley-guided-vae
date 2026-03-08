@@ -6,8 +6,10 @@
 
 > **BSc in Computing, Thesis Project**  
 > **Author:** Roko  
-> **Institution:** Faculty of Electrical Engineering and Computing (FER), University of Zagreb  
+> **Institution:** Faculty of Electrical Engineering and Computing (FER), University of Zagreb
+
 ---
+
 ## Abstract
 
 This project investigates the optimization of Variational Autoencoder (VAE) training by replacing standard, fixed-hyperparameter loss scaling with a dynamic reweighting of per-feature reconstruction errors. By framing feature contributions as a cooperative game, the methodology leverages computationally efficient mathematical approximations of exponentially complex Shapley values to continuously adjust these weight factors during model training. Finally, the proposed approach is experimentally evaluated against static baselines to rigorously analyze the trade-off between the computational overhead of online Shapley estimation and resulting improvements in convergence speed and final reconstruction quality.
@@ -15,21 +17,45 @@ This project investigates the optimization of Variational Autoencoder (VAE) trai
 ## Dataset
 
 We use the **UCI Wine Quality Dataset**, which consists of 11 continuous physicochemical features (e.g., Fixed acidity, pH, Alcohol) and a quality score. The data is treated as an 11-dimensional continuous input for unsupervised reconstruction.
+P. Cortez, A. Cerdeira, F. Almeida, T. Matos and J. Reis.
+_Modeling wine preferences by data mining from physicochemical properties._
+Decision Support Systems, 47(4):547–553, 2009.
+
+Dataset available from the UCI Machine Learning Repository.
 
 ## Mathematical Framing
 
 The core innovation treats VAE training as a cooperative game per epoch:
-* **Players:** The 11 individual input features.
-* **Payoff:** The reconstruction performance of the VAE given a specific subset (coalition) of features.
 
-## Dataset
+- **Players:** The 11 individual input features.
+- **Payoff:** The reconstruction performance of the VAE given a specific subset (coalition) of features.
 
-This project uses the Wine Quality dataset:
+## Requirements
 
-P. Cortez, A. Cerdeira, F. Almeida, T. Matos and J. Reis.  
-*Modeling wine preferences by data mining from physicochemical properties.*  
-Decision Support Systems, 47(4):547–553, 2009.
+- Python 3.11+
+- (Recommended) `uv` package manager
+- Alternatively: standard `pip`
 
-Dataset available from the UCI Machine Learning Repository.
+---
+
+## Installation
+
+### Option A — Recommended (uv)
+
+```bash
+uv venv
+# activate the environment
+uv sync
+```
+
+---
+
+### Option B — Standard pip
+
+```bash
+python -m venv .venv
+# activate the environment
+pip install -r requirements.txt
+```
 
 ## References
