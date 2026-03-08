@@ -1,0 +1,81 @@
+---
+title: "Wine Quality EDA"
+format:
+  html: default
+  pdf: default
+jupyter: python3
+execute:
+  echo: false
+  warning: false
+  error: true
+---
+
+```{python}
+from pathlib import Path
+
+import pandas as pd
+
+OUTPUT_DIR = Path("../analysis/output")
+
+
+def read_indexed_csv(name):
+    return pd.read_csv(OUTPUT_DIR / name, index_col=0)
+
+
+def read_plain_csv(name):
+    return pd.read_csv(OUTPUT_DIR / name)
+```
+
+## Red Wine
+
+```{python}
+read_indexed_csv("red_summary.csv")
+```
+
+![](../analysis/output/figures/red_distributions.png)
+
+![](../analysis/output/figures/red_pearson_correlation.png)
+
+![](../analysis/output/figures/red_spearman_correlation.png)
+
+```{python}
+read_plain_csv("red_pca_summary.csv")
+```
+
+![](../analysis/output/figures/red_pca_eigenvalues.png)
+
+## White Wine
+
+```{python}
+read_indexed_csv("white_summary.csv")
+```
+
+![](../analysis/output/figures/white_distributions.png)
+
+![](../analysis/output/figures/white_pearson_correlation.png)
+
+![](../analysis/output/figures/white_spearman_correlation.png)
+
+```{python}
+read_plain_csv("white_pca_summary.csv")
+```
+
+![](../analysis/output/figures/white_pca_eigenvalues.png)
+
+## Combined
+
+```{python}
+read_indexed_csv("both_summary.csv")
+```
+
+![](../analysis/output/figures/both_distributions.png)
+
+![](../analysis/output/figures/both_pearson_correlation.png)
+
+![](../analysis/output/figures/both_spearman_correlation.png)
+
+```{python}
+read_plain_csv("both_pca_summary.csv")
+```
+
+![](../analysis/output/figures/both_pca_eigenvalues.png)
