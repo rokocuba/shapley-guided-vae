@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **BSc in Computing, Thesis Project**  
-> **Author:** Roko  
+> **Author:** Roko Čubrić
 > **Institution:** Faculty of Electrical Engineering and Computing (FER), University of Zagreb
 
 ---
