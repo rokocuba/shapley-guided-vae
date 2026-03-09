@@ -2,8 +2,11 @@
 title: "Wine Quality EDA"
 format:
   html: default
-  pdf: default
-jupyter: python3
+  pdf:
+      pdf-engine: pdflatex
+      papersize: a4
+      fontsize: 11pt
+jupyter: shapley-guided-vae
 execute:
   echo: false
   warning: false
@@ -11,11 +14,17 @@ execute:
 ---
 
 ```{python}
+import os
 from pathlib import Path
 
 import pandas as pd
+from IPython.display import Latex, display
 
 OUTPUT_DIR = Path("../analysis/output")
+
+
+def is_pdf():
+  return os.environ.get("QUARTO_FORMAT", "").startswith("pdf")
 
 
 def read_indexed_csv(name):
@@ -24,58 +33,127 @@ def read_indexed_csv(name):
 
 def read_plain_csv(name):
     return pd.read_csv(OUTPUT_DIR / name)
+
+
+def show_table(df, caption, indexed=True):
+  if is_pdf():
+    column_format = "l" + "r" * len(df.columns) if indexed else "r" * len(df.columns)
+    tabular = df.to_latex(index=indexed, escape=False, column_format=column_format)
+    latex = "\n".join(
+      [
+        "\\begin{table}[!htbp]",
+        "\\centering",
+        "\\scriptsize",
+        f"\\caption{{{caption}}}",
+        "\\resizebox{\\textwidth}{!}{%",
+        tabular,
+        "}",
+        "\\end{table}",
+      ]
+    )
+    display(Latex(latex))
+  else:
+    display(df)
+
+
+def show_summary_tables(name):
+  df = read_indexed_csv(f"{name}_summary.csv")
+  core = df[["count", "mean", "std", "variance"]]
+  shape = df[["min", "q1", "median", "q3", "max", "skewness", "kurtosis"]]
+  show_table(core, f"{name.title()} wine summary statistics: central tendency and spread")
+  show_table(shape, f"{name.title()} wine summary statistics: range, quantiles, and shape")
 ```
 
 ## Red Wine
 
-```{python}
-read_indexed_csv("red_summary.csv")
-```
-
-![](../analysis/output/figures/red_distributions.png)
-
-![](../analysis/output/figures/red_pearson_correlation.png)
-
-![](../analysis/output/figures/red_spearman_correlation.png)
+### Summary Table
 
 ```{python}
-read_plain_csv("red_pca_summary.csv")
+show_summary_tables("red")
 ```
 
-![](../analysis/output/figures/red_pca_eigenvalues.png)
+### Distribution Plots
+
+![Red wine distributions for all 11 variables](../analysis/output/figures/red_distributions.png)
+
+### Pearson Correlation
+
+![Red wine Pearson correlation matrix](../analysis/output/figures/red_pearson_correlation.png)
+
+### Spearman Correlation
+
+![Red wine Spearman correlation matrix](../analysis/output/figures/red_spearman_correlation.png)
+
+### PCA Summary Table
+
+```{python}
+show_table(read_plain_csv("red_pca_summary.csv"), "Red wine PCA summary", indexed=False)
+```
+
+### PCA Eigenvalues
+
+![Red wine PCA eigenvalues](../analysis/output/figures/red_pca_eigenvalues.png)
+
+\newpage
 
 ## White Wine
 
-```{python}
-read_indexed_csv("white_summary.csv")
-```
-
-![](../analysis/output/figures/white_distributions.png)
-
-![](../analysis/output/figures/white_pearson_correlation.png)
-
-![](../analysis/output/figures/white_spearman_correlation.png)
+### Summary Table
 
 ```{python}
-read_plain_csv("white_pca_summary.csv")
+show_summary_tables("white")
 ```
 
-![](../analysis/output/figures/white_pca_eigenvalues.png)
+### Distribution Plots
+
+![White wine distributions for all 11 variables](../analysis/output/figures/white_distributions.png)
+
+### Pearson Correlation
+
+![White wine Pearson correlation matrix](../analysis/output/figures/white_pearson_correlation.png)
+
+### Spearman Correlation
+
+![White wine Spearman correlation matrix](../analysis/output/figures/white_spearman_correlation.png)
+
+### PCA Summary Table
+
+```{python}
+show_table(read_plain_csv("white_pca_summary.csv"), "White wine PCA summary", indexed=False)
+```
+
+### PCA Eigenvalues
+
+![White wine PCA eigenvalues](../analysis/output/figures/white_pca_eigenvalues.png)
+
+\newpage
 
 ## Combined
 
-```{python}
-read_indexed_csv("both_summary.csv")
-```
-
-![](../analysis/output/figures/both_distributions.png)
-
-![](../analysis/output/figures/both_pearson_correlation.png)
-
-![](../analysis/output/figures/both_spearman_correlation.png)
+### Summary Table
 
 ```{python}
-read_plain_csv("both_pca_summary.csv")
+show_summary_tables("both")
 ```
 
-![](../analysis/output/figures/both_pca_eigenvalues.png)
+### Distribution Plots
+
+![Combined wine distributions for all 11 variables](../analysis/output/figures/both_distributions.png)
+
+### Pearson Correlation
+
+![Combined wine Pearson correlation matrix](../analysis/output/figures/both_pearson_correlation.png)
+
+### Spearman Correlation
+
+![Combined wine Spearman correlation matrix](../analysis/output/figures/both_spearman_correlation.png)
+
+### PCA Summary Table
+
+```{python}
+show_table(read_plain_csv("both_pca_summary.csv"), "Combined wine PCA summary", indexed=False)
+```
+
+### PCA Eigenvalues
+
+![Combined wine PCA eigenvalues](../analysis/output/figures/both_pca_eigenvalues.png)

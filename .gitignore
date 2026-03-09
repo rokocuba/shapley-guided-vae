@@ -1,2 +1,6 @@
 .venv/
 updatereqs.ps1
+analysis/
+reports/*
+!reports/
+!reports/*.pdf
