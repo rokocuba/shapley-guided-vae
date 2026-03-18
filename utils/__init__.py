@@ -1,3 +1,15 @@
-from .data_loader import make_wine_dataloader, load_wine_features
+from .data_loader import (
+    WineDataBundle,
+    denormalize_features,
+    load_wine_bundle,
+    load_wine_features,
+    make_wine_dataloader,
+)
 
-__all__ = ["load_wine_features", "make_wine_dataloader"]
+__all__ = [
+    "WineDataBundle",
+    "load_wine_bundle",
+    "load_wine_features",
+    "make_wine_dataloader",
+    "denormalize_features",
+]

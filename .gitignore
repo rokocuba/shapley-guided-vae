@@ -4,3 +4,7 @@ analysis/
 reports/*
 !reports/
 !reports/*.pdf
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd

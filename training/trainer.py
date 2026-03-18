@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any
 
 import torch
@@ -17,6 +19,12 @@ class TrainerState:
     batch: int = 0
     step: int = 0
     history: list[dict[str, float]] = field(default_factory=list)
+    train_started_at: str = ""
+    train_ended_at: str = ""
+    train_duration_sec: float = 0.0
+    epoch_durations_sec: list[float] = field(default_factory=list)
+    callback_timing: dict[str, float] = field(default_factory=dict)
+    callback_calls: dict[str, int] = field(default_factory=dict)
 
 
 class Trainer:
@@ -53,8 +61,11 @@ class Trainer:
     def fit(
         self, train_loader: DataLoader[torch.Tensor], epochs: int
     ) -> list[dict[str, float]]:
+        train_started = perf_counter()
+        self.state.train_started_at = datetime.now(timezone.utc).isoformat()
         self.callbacks.call("on_train_begin", self, logs={})
         for epoch in range(epochs):
+            epoch_started = perf_counter()
             self.state.epoch = epoch
             self.model.train()
             self.callbacks.call("on_epoch_begin", self, epoch, logs={})
@@ -71,6 +82,9 @@ class Trainer:
                 n_batches += 1
             epoch_logs = {k: v / max(1, n_batches) for k, v in running.items()}
             self.state.history.append(epoch_logs)
+            self.state.epoch_durations_sec.append(perf_counter() - epoch_started)
             self.callbacks.call("on_epoch_end", self, epoch, logs=epoch_logs)
         self.callbacks.call("on_train_end", self, logs={"history": self.state.history})
+        self.state.train_duration_sec = perf_counter() - train_started
+        self.state.train_ended_at = datetime.now(timezone.utc).isoformat()
         return self.state.history
