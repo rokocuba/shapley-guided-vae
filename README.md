@@ -45,7 +45,11 @@ The core innovation treats VAE training as a cooperative game per epoch:
 ```bash
 uv venv
 # activate the environment
-uv sync
+# CPU-only (default for most users)
+uv sync --extra cpu
+
+# CUDA 12.1
+uv sync --extra cu121
 ```
 
 ---
