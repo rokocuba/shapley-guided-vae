@@ -58,8 +58,29 @@ class Trainer:
             "kl": out.kl.item(),
         }
 
+    @torch.no_grad()
+    def _evaluate_loader(self, loader: DataLoader[torch.Tensor]) -> dict[str, float]:
+        model_was_training = self.model.training
+        self.model.eval()
+        running: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0}
+        n_batches = 0
+        for x in loader:
+            x = x.to(self.device)
+            x_hat, mu, logvar = self.model(x)
+            out = self.loss_fn(x, x_hat, mu, logvar)
+            running["loss"] += out.total.item()
+            running["recon"] += out.recon.item()
+            running["kl"] += out.kl.item()
+            n_batches += 1
+        if model_was_training:
+            self.model.train()
+        return {f"val_{k}": v / max(1, n_batches) for k, v in running.items()}
+
     def fit(
-        self, train_loader: DataLoader[torch.Tensor], epochs: int
+        self,
+        train_loader: DataLoader[torch.Tensor],
+        epochs: int,
+        val_loader: DataLoader[torch.Tensor] | None = None,
     ) -> list[dict[str, float]]:
         train_started = perf_counter()
         self.state.train_started_at = datetime.now(timezone.utc).isoformat()
@@ -81,6 +102,9 @@ class Trainer:
                 self.state.step += 1
                 n_batches += 1
             epoch_logs = {k: v / max(1, n_batches) for k, v in running.items()}
+            if val_loader is not None:
+                epoch_logs.update(self._evaluate_loader(val_loader))
+            epoch_logs["beta"] = float(self.loss_fn.beta)
             self.state.history.append(epoch_logs)
             self.state.epoch_durations_sec.append(perf_counter() - epoch_started)
             self.callbacks.call("on_epoch_end", self, epoch, logs=epoch_logs)

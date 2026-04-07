@@ -70,7 +70,11 @@ def save_training_run(
         {"hook": k, "seconds": float(v), "calls": int(callback_calls.get(k, 0))}
         for k, v in callback_timing.items()
     ]
-    pd.DataFrame(callback_rows).to_csv(callback_timing_path, index=False)
+    pd.DataFrame(callback_rows, columns=["hook", "seconds", "calls"]).to_csv(
+        callback_timing_path, index=False
+    )
+
+    callback_total_calls = int(sum(callback_calls.values()))
 
     record = TrainingRunRecord(
         run_id=run_id,
@@ -87,6 +91,7 @@ def save_training_run(
             "epoch_durations_sec": getattr(state, "epoch_durations_sec", []),
             "callback_timing_sec": callback_timing,
             "callback_calls": callback_calls,
+            "callback_total_calls": callback_total_calls,
         },
         artifacts={
             "model": str(model_path),
@@ -117,3 +122,17 @@ def load_training_runs(
             continue
         runs.append(record)
     return runs
+
+
+def update_training_run_artifacts(
+    run_dir: str | Path, artifacts: dict[str, str]
+) -> None:
+    run_dir = Path(run_dir)
+    metadata_path = run_dir / "metadata.json"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Missing metadata file: {metadata_path}")
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+    current = data.get("artifacts", {})
+    current.update(artifacts)
+    data["artifacts"] = current
+    metadata_path.write_text(json.dumps(data, indent=2), encoding="utf-8")

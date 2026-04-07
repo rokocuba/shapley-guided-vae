@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from time import perf_counter
@@ -62,6 +63,55 @@ class CallbackList:
                 timing[key] = timing.get(key, 0.0) + elapsed
             if calls is not None:
                 calls[key] = calls.get(key, 0) + 1
+
+
+class BetaWarmupCallback(Callback):
+    def __init__(
+        self,
+        target_beta: float,
+        warmup_epochs: int,
+        strategy: str = "linear",
+        start_beta: float = 0.0,
+    ) -> None:
+        strategy = strategy.strip().lower()
+        allowed = {"linear", "cosine", "sigmoid"}
+        if strategy not in allowed:
+            raise ValueError(
+                f"Unknown beta warmup strategy '{strategy}'. Allowed: {sorted(allowed)}"
+            )
+        if warmup_epochs < 1:
+            raise ValueError("warmup_epochs must be >= 1.")
+        self.target_beta = float(target_beta)
+        self.start_beta = float(start_beta)
+        self.warmup_epochs = int(warmup_epochs)
+        self.strategy = strategy
+
+    def _shape(self, progress: float) -> float:
+        if self.strategy == "linear":
+            return progress
+        if self.strategy == "cosine":
+            return 0.5 - 0.5 * math.cos(math.pi * progress)
+        low = 1.0 / (1.0 + math.exp(6.0))
+        high = 1.0 / (1.0 + math.exp(-6.0))
+        raw = 1.0 / (1.0 + math.exp(-12.0 * (progress - 0.5)))
+        return (raw - low) / (high - low)
+
+    def beta_for_epoch(self, epoch: int) -> float:
+        if self.warmup_epochs == 1:
+            return self.target_beta
+        if epoch >= self.warmup_epochs:
+            return self.target_beta
+        progress = max(0.0, min(1.0, epoch / float(self.warmup_epochs - 1)))
+        shaped = self._shape(progress)
+        return self.start_beta + (self.target_beta - self.start_beta) * shaped
+
+    def on_train_begin(self, trainer: Any, logs: dict[str, Any] | None = None) -> None:
+        trainer.loss_fn.beta = float(self.beta_for_epoch(0))
+
+    def on_epoch_begin(
+        self, trainer: Any, epoch: int, logs: dict[str, Any] | None = None
+    ) -> None:
+        trainer.loss_fn.beta = float(self.beta_for_epoch(epoch))
 
 
 class ShapleyCallback(Callback):
