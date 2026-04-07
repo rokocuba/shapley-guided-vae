@@ -6,7 +6,7 @@
 
 > **BSc in Computing, Thesis Project**  
 > **Author:** Roko Čubrić\
-> **Institution:** Faculty of Electrical Engineering and Computing (FER), University of Zagreb
+> **Institution:** Faculty of Electrical Engineering and Computing (FER), University of Zagreb\
 > **Mentor:** Tomislav Burić
 
 ---
