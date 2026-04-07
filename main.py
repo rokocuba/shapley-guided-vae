@@ -17,14 +17,15 @@ from utils import load_wine_bundle
 
 def run_baseline(
     data_dir: str | Path = "data",
-    epochs: int = 50,
+    epochs: int = 200,
     batch_size: int = 128,
     lr: float = 1e-3,
     latent_dim: int = 5,
+    hidden_dims: tuple[int, ...] | list[int] = (16, 24, 16, 8),
     test_size: float = 0.2,
     split_seed: int = 42,
     input_dropout: float = 0.0,
-    beta: float = 1.0,
+    beta: float = 0.15,
     beta_warmup: str | None = None,
     beta_start: float = 0.0,
     beta_warmup_epochs: int = 30,
@@ -35,9 +36,15 @@ def run_baseline(
 ) -> list[dict[str, float]]:
     bundle = load_wine_bundle(data_dir)
     x = bundle.x_scaled
+    hidden_dims_tuple = tuple(int(v) for v in hidden_dims)
+    if len(hidden_dims_tuple) == 0:
+        raise ValueError("hidden_dims must contain at least one layer width.")
     model = VAE(
         VAEConfig(
-            input_dim=x.shape[1], latent_dim=latent_dim, input_dropout=input_dropout
+            input_dim=x.shape[1],
+            hidden_dims=hidden_dims_tuple,
+            latent_dim=latent_dim,
+            input_dropout=input_dropout,
         )
     )
     loss_fn = DynamicWeightedVAELoss(input_dim=x.shape[1], beta=beta)
