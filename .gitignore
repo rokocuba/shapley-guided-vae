@@ -8,3 +8,4 @@ reports/*
 *.pyc
 *.pyo
 *.pyd
+AGENTS.md

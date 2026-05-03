@@ -10,6 +10,7 @@ class VAEConfig:
     hidden_dims: tuple[int, ...] = (16, 8)
     latent_dim: int = 5
     input_dropout: float = 0.0
+    deterministic_latent: bool = False
 
 
 class Encoder(nn.Module):
@@ -51,8 +52,9 @@ class VAE(nn.Module):
         self.encoder = Encoder(config)
         self.decoder = Decoder(config)
 
-    @staticmethod
-    def reparameterize(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        if self.config.deterministic_latent:
+            return mu
         std = torch.exp(0.5 * logvar)
         return mu + std * torch.randn_like(std)
 

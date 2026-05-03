@@ -35,12 +35,14 @@ class Trainer:
         loss_fn: DynamicWeightedVAELoss,
         device: str | torch.device = "cpu",
         callbacks: list[Callback] | None = None,
+        scheduler: Any | None = None,
     ) -> None:
         self.model = model
         self.optimizer = optimizer
         self.loss_fn = loss_fn
         self.device = torch.device(device)
         self.callbacks = CallbackList(callbacks or [])
+        self.scheduler = scheduler
         self.state = TrainerState()
         self.model.to(self.device)
         self.loss_fn.to(self.device)
@@ -58,6 +60,13 @@ class Trainer:
             "kl": out.kl.item(),
         }
 
+    def _deterministic_reconstruct(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        mu, logvar = self.model.encoder(x)
+        x_hat = self.model.decoder(mu)
+        return x_hat, mu, logvar
+
     @torch.no_grad()
     def _evaluate_loader(self, loader: DataLoader[torch.Tensor]) -> dict[str, float]:
         model_was_training = self.model.training
@@ -66,7 +75,7 @@ class Trainer:
         n_batches = 0
         for x in loader:
             x = x.to(self.device)
-            x_hat, mu, logvar = self.model(x)
+            x_hat, mu, logvar = self._deterministic_reconstruct(x)
             out = self.loss_fn(x, x_hat, mu, logvar)
             running["loss"] += out.total.item()
             running["recon"] += out.recon.item()
@@ -83,6 +92,7 @@ class Trainer:
         val_loader: DataLoader[torch.Tensor] | None = None,
     ) -> list[dict[str, float]]:
         train_started = perf_counter()
+        elapsed_train_sec = 0.0
         self.state.train_started_at = datetime.now(timezone.utc).isoformat()
         self.callbacks.call("on_train_begin", self, logs={})
         for epoch in range(epochs):
@@ -104,10 +114,21 @@ class Trainer:
             epoch_logs = {k: v / max(1, n_batches) for k, v in running.items()}
             if val_loader is not None:
                 epoch_logs.update(self._evaluate_loader(val_loader))
+            epoch_duration_sec = perf_counter() - epoch_started
+            elapsed_train_sec += epoch_duration_sec
             epoch_logs["beta"] = float(self.loss_fn.beta)
+            epoch_logs["lr"] = float(self.optimizer.param_groups[0]["lr"])
+            epoch_logs["epoch_duration_sec"] = float(epoch_duration_sec)
+            epoch_logs["elapsed_train_sec"] = float(elapsed_train_sec)
             self.state.history.append(epoch_logs)
-            self.state.epoch_durations_sec.append(perf_counter() - epoch_started)
+            self.state.epoch_durations_sec.append(epoch_duration_sec)
             self.callbacks.call("on_epoch_end", self, epoch, logs=epoch_logs)
+            if self.scheduler is not None:
+                if self.scheduler.__class__.__name__ == "ReduceLROnPlateau":
+                    monitor = float(epoch_logs.get("val_loss", epoch_logs["loss"]))
+                    self.scheduler.step(monitor)
+                else:
+                    self.scheduler.step()
         self.callbacks.call("on_train_end", self, logs={"history": self.state.history})
         self.state.train_duration_sec = perf_counter() - train_started
         self.state.train_ended_at = datetime.now(timezone.utc).isoformat()
