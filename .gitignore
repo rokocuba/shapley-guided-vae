@@ -5,6 +5,7 @@ analysis/*
 analysis/output/*
 !analysis/output/mfeat_beefy_linear_broad_sweep_corrected/
 analysis/output/mfeat_beefy_linear_broad_sweep_corrected/*
+!analysis/output/mfeat_beefy_linear_broad_sweep_corrected/*.png
 !analysis/output/mfeat_beefy_linear_broad_sweep_corrected/mfeat-beefy-linear-beta0030-*/
 !analysis/output/mfeat_beefy_linear_broad_sweep_corrected/mfeat-beefy-linear-beta0080-*/
 !analysis/output/mfeat_beefy_linear_broad_sweep_corrected/mfeat-beefy-linear-beta0250-*/
