@@ -34,9 +34,7 @@ def _resolve_dataset_dir(
     candidate = root / dataset_name
     if all((candidate / file_name).exists() for file_name in required_files):
         return candidate
-    raise FileNotFoundError(
-        f"Could not resolve dataset '{dataset_name}' under {root}."
-    )
+    raise FileNotFoundError(f"Could not resolve dataset '{dataset_name}' under {root}.")
 
 
 def fit_feature_scaler(x_train_raw: np.ndarray) -> StandardScaler:

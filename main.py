@@ -179,7 +179,9 @@ def run_baseline(
             "label_name": bundle.label_name,
             "class_names": class_names,
             "scaler_mean": None if scaler is None else [float(v) for v in scaler.mean_],
-            "scaler_scale": None if scaler is None else [float(v) for v in scaler.scale_],
+            "scaler_scale": (
+                None if scaler is None else [float(v) for v in scaler.scale_]
+            ),
         },
         output_dir=output_dir,
         training_type=training_type,

@@ -107,7 +107,9 @@ def plot_feature_difference_distributions(
         axes_flat[j].axis("off")
 
     suffix = f" - {title_suffix}" if title_suffix else ""
-    fig.suptitle(f"Feature Difference Distributions (output - input){selected_suffix}{suffix}")
+    fig.suptitle(
+        f"Feature Difference Distributions (output - input){selected_suffix}{suffix}"
+    )
     fig.tight_layout(rect=(0.0, 0.02, 1.0, 0.97))
     out_png = Path(out_png)
     out_png.parent.mkdir(parents=True, exist_ok=True)
