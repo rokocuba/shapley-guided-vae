@@ -24,6 +24,15 @@ analysis/output/mfeat_beefy_linear_broad_sweep_corrected/mfeat-beefy-linear-beta
 !analysis/output/mfeat_beefy_linear_broad_sweep_corrected/mfeat-beefy-linear-beta0030-*/latent_analysis/*.png
 !analysis/output/mfeat_beefy_linear_broad_sweep_corrected/mfeat-beefy-linear-beta0080-*/latent_analysis/*.png
 !analysis/output/mfeat_beefy_linear_broad_sweep_corrected/mfeat-beefy-linear-beta0250-*/latent_analysis/*.png
+!analysis/output/mfeat_run_1/
+analysis/output/mfeat_run_1/*
+!analysis/output/mfeat_run_1/*.png
+!analysis/output/mfeat_run_1/*/
+analysis/output/mfeat_run_1/*/*
+!analysis/output/mfeat_run_1/*/*.png
+!analysis/output/mfeat_run_1/*/latent_analysis/
+analysis/output/mfeat_run_1/*/latent_analysis/*
+!analysis/output/mfeat_run_1/*/latent_analysis/*.png
 reports/*
 !reports/
 !reports/*.pdf

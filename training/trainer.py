@@ -36,6 +36,7 @@ class Trainer:
         device: str | torch.device = "cpu",
         callbacks: list[Callback] | None = None,
         scheduler: Any | None = None,
+        scheduler_monitor: str = "loss",
     ) -> None:
         self.model = model
         self.optimizer = optimizer
@@ -43,6 +44,7 @@ class Trainer:
         self.device = torch.device(device)
         self.callbacks = CallbackList(callbacks or [])
         self.scheduler = scheduler
+        self.scheduler_monitor = scheduler_monitor
         self.state = TrainerState()
         self.model.to(self.device)
         self.loss_fn.to(self.device)
@@ -125,7 +127,13 @@ class Trainer:
             self.callbacks.call("on_epoch_end", self, epoch, logs=epoch_logs)
             if self.scheduler is not None:
                 if self.scheduler.__class__.__name__ == "ReduceLROnPlateau":
-                    monitor = float(epoch_logs.get("val_loss", epoch_logs["loss"]))
+                    monitor_key = self.scheduler_monitor
+                    if monitor_key not in epoch_logs:
+                        raise KeyError(
+                            f"Scheduler monitor '{monitor_key}' not found in epoch logs. "
+                            f"Available keys: {sorted(epoch_logs)}"
+                        )
+                    monitor = float(epoch_logs[monitor_key])
                     self.scheduler.step(monitor)
                 else:
                     self.scheduler.step()

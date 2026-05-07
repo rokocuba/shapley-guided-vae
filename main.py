@@ -49,7 +49,11 @@ def run_baseline(
     batch_size: int = 128,
     lr: float = 1e-3,
     lr_scheduler: str | None = None,
+    lr_scheduler_monitor: str = "loss",
     lr_min: float = 1e-5,
+    lr_plateau_factor: float = 0.8,
+    lr_plateau_patience: int = 15,
+    lr_plateau_threshold: float = 1e-4,
     latent_dim: int = 5,
     hidden_dims: tuple[int, ...] | list[int] = (16, 24, 16, 8),
     test_size: float = 0.2,
@@ -101,9 +105,18 @@ def run_baseline(
                 T_max=max(1, epochs),
                 eta_min=float(lr_min),
             )
+        elif scheduler_name == "plateau":
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="min",
+                factor=float(lr_plateau_factor),
+                patience=int(lr_plateau_patience),
+                threshold=float(lr_plateau_threshold),
+                min_lr=float(lr_min),
+            )
         else:
             raise ValueError(
-                "Unknown lr_scheduler. Supported values: 'cosine' or None."
+                "Unknown lr_scheduler. Supported values: 'cosine', 'plateau' or None."
             )
     callbacks = []
     if beta_warmup is not None:
@@ -122,6 +135,7 @@ def run_baseline(
         device=device or ("cuda" if torch.cuda.is_available() else "cpu"),
         callbacks=callbacks,
         scheduler=scheduler,
+        scheduler_monitor=lr_scheduler_monitor,
     )
     train_tensor = x_scaled[train_idx]
     test_tensor = x_scaled[test_idx]
@@ -151,7 +165,11 @@ def run_baseline(
             "batch_size": batch_size,
             "lr": lr,
             "lr_scheduler": lr_scheduler,
+            "lr_scheduler_monitor": lr_scheduler_monitor,
             "lr_min": lr_min,
+            "lr_plateau_factor": lr_plateau_factor,
+            "lr_plateau_patience": lr_plateau_patience,
+            "lr_plateau_threshold": lr_plateau_threshold,
             "latent_dim": latent_dim,
             "dataset_name": bundle.dataset_name,
             "test_size": test_size,
@@ -221,7 +239,11 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--lr-scheduler", type=str, default=None)
+    parser.add_argument("--lr-scheduler-monitor", type=str, default="loss")
     parser.add_argument("--lr-min", type=float, default=1e-5)
+    parser.add_argument("--lr-plateau-factor", type=float, default=0.1)
+    parser.add_argument("--lr-plateau-patience", type=int, default=10)
+    parser.add_argument("--lr-plateau-threshold", type=float, default=1e-4)
     parser.add_argument("--latent-dim", type=int, default=5)
     parser.add_argument("--hidden-dims", type=str, default="16,24,16,8")
     parser.add_argument("--test-size", type=float, default=0.2)
@@ -249,7 +271,11 @@ def main() -> None:
         batch_size=args.batch_size,
         lr=args.lr,
         lr_scheduler=args.lr_scheduler,
+        lr_scheduler_monitor=args.lr_scheduler_monitor,
         lr_min=args.lr_min,
+        lr_plateau_factor=args.lr_plateau_factor,
+        lr_plateau_patience=args.lr_plateau_patience,
+        lr_plateau_threshold=args.lr_plateau_threshold,
         latent_dim=args.latent_dim,
         hidden_dims=_parse_hidden_dims(args.hidden_dims),
         test_size=args.test_size,
