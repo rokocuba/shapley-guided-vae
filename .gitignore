@@ -1,17 +1,5 @@
 .venv/
 updatereqs.ps1
-analysis/*
-!analysis/output/
-analysis/output/*
-!analysis/output/mfeat_run_1/
-analysis/output/mfeat_run_1/*
-!analysis/output/mfeat_run_1/*.png
-!analysis/output/mfeat_run_1/*/
-analysis/output/mfeat_run_1/*/*
-!analysis/output/mfeat_run_1/*/*.png
-!analysis/output/mfeat_run_1/*/latent_analysis/
-analysis/output/mfeat_run_1/*/latent_analysis/*
-!analysis/output/mfeat_run_1/*/latent_analysis/*.png
 reports/*
 !reports/
 !reports/*.pdf

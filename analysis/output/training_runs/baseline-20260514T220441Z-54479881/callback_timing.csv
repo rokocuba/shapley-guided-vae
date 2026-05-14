@@ -1,0 +1,7 @@
+hook,seconds,calls
+BetaWarmupCallback.on_train_begin,2.1599989850074053e-05,1
+BetaWarmupCallback.on_epoch_begin,0.02839240146568045,4000
+BetaWarmupCallback.on_batch_begin,0.014108300034422427,4000
+BetaWarmupCallback.on_batch_end,0.019561298773624003,4000
+BetaWarmupCallback.on_epoch_end,0.00846019951859489,4000
+BetaWarmupCallback.on_train_end,1.500011421740055e-06,1
