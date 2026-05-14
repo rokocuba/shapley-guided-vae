@@ -17,10 +17,26 @@ This project investigates the optimization of Variational Autoencoder (VAE) trai
 
 ## Dataset
 
-We use the **UCI Wine Quality Dataset**, which consists of 11 continuous physicochemical features (e.g., Fixed acidity, pH, Alcohol) and a quality score. The data is treated as an 11-dimensional continuous input for unsupervised reconstruction.
-P. Cortez, A. Cerdeira, F. Almeida, T. Matos and J. Reis.
-_Modeling wine preferences by data mining from physicochemical properties._
-Decision Support Systems, 47(4):547–553, 2009.
+We use the **UCI Multiple Features (mfeat) Dataset**.
+
+For this project, the relevant notion of class is the **six input classes** (descriptor groups) that are concatenated into one flat VAE input vector. Each sample contains all six input classes.
+
+| Dataset property     | Value |
+| -------------------- | ----: |
+| Total samples        |  2000 |
+| Input classes        |     6 |
+| Train samples        |  1600 |
+| Test samples         |   400 |
+| Total input features |   649 |
+
+| Input class | Description                | Floats |
+| ----------- | -------------------------- | -----: |
+| `fou`       | Fourier coefficients       |     76 |
+| `fac`       | Profile correlations       |    216 |
+| `kar`       | Karhunen-Love coefficients |     64 |
+| `pix`       | Pixel averages             |    240 |
+| `zer`       | Zernike moments            |     47 |
+| `mor`       | Morphological features     |      6 |
 
 Dataset available from the UCI Machine Learning Repository.
 
@@ -28,7 +44,7 @@ Dataset available from the UCI Machine Learning Repository.
 
 The core innovation treats VAE training as a cooperative game per epoch:
 
-- **Players:** The 11 individual input features.
+- **Players:** The input features.
 - **Payoff:** The reconstruction performance of the VAE given a specific subset (coalition) of features.
 
 ## Requirements
@@ -64,3 +80,5 @@ pip install -r requirements.txt
 ```
 
 ## References
+
+- Hugh Chen, Ian C. Covert, Scott M. Lundberg, and Su-In Lee. _Algorithms to estimate Shapley value feature attributions._ arXiv:2207.07605, 2022. https://doi.org/10.48550/arXiv.2207.07605

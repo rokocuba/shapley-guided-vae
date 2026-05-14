@@ -45,26 +45,26 @@ def _parse_hidden_dims(value: str) -> tuple[int, ...]:
 def run_baseline(
     data_dir: str | Path = "data",
     dataset_name: str = "mfeat",
-    epochs: int = 200,
+    epochs: int = 400,
     batch_size: int = 128,
     lr: float = 1e-3,
-    lr_scheduler: str | None = None,
+    lr_scheduler: str | None = "plateau",
     lr_scheduler_monitor: str = "loss",
-    lr_min: float = 1e-5,
+    lr_min: float = 1e-8,
     lr_plateau_factor: float = 0.8,
     lr_plateau_patience: int = 15,
     lr_plateau_threshold: float = 1e-4,
-    latent_dim: int = 5,
-    hidden_dims: tuple[int, ...] | list[int] = (16, 24, 16, 8),
+    latent_dim: int = 6,
+    hidden_dims: tuple[int, ...] | list[int] = (256, 128, 64, 32),
     test_size: float = 0.2,
     split_seed: int = 42,
     input_dropout: float = 0.0,
     normalize_features: bool = True,
     deterministic_latent: bool = False,
-    beta: float = 0.15,
-    beta_warmup: str | None = None,
+    beta: float = 0.08,
+    beta_warmup: str | None = "linear",
     beta_start: float = 0.0,
-    beta_warmup_epochs: int = 30,
+    beta_warmup_epochs: int = 100,
     device: str | None = None,
     training_type: str = "baseline",
     shapley_tactic: str | None = None,
@@ -235,26 +235,26 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--dataset-name", type=str, default="mfeat")
-    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--epochs", type=int, default=400)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--lr-scheduler", type=str, default=None)
+    parser.add_argument("--lr-scheduler", type=str, default="plateau")
     parser.add_argument("--lr-scheduler-monitor", type=str, default="loss")
     parser.add_argument("--lr-min", type=float, default=1e-5)
-    parser.add_argument("--lr-plateau-factor", type=float, default=0.1)
-    parser.add_argument("--lr-plateau-patience", type=int, default=10)
+    parser.add_argument("--lr-plateau-factor", type=float, default=0.8)
+    parser.add_argument("--lr-plateau-patience", type=int, default=15)
     parser.add_argument("--lr-plateau-threshold", type=float, default=1e-4)
-    parser.add_argument("--latent-dim", type=int, default=5)
-    parser.add_argument("--hidden-dims", type=str, default="16,24,16,8")
+    parser.add_argument("--latent-dim", type=int, default=6)
+    parser.add_argument("--hidden-dims", type=str, default="256,128,64,32")
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--input-dropout", type=float, default=0.0)
     parser.add_argument("--no-normalize-features", action="store_true")
     parser.add_argument("--deterministic-latent", action="store_true")
-    parser.add_argument("--beta", type=float, default=0.15)
-    parser.add_argument("--beta-warmup", type=str, default=None)
+    parser.add_argument("--beta", type=float, default=0.08)
+    parser.add_argument("--beta-warmup", type=str, default="linear")
     parser.add_argument("--beta-start", type=float, default=0.0)
-    parser.add_argument("--beta-warmup-epochs", type=int, default=30)
+    parser.add_argument("--beta-warmup-epochs", type=int, default=100)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--training-type", type=str, default="baseline")
     parser.add_argument(
