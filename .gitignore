@@ -8,3 +8,4 @@ reports/*
 *.pyo
 *.pyd
 AGENTS.
+analysis/output/*

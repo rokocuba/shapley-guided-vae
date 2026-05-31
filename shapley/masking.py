@@ -6,4 +6,8 @@ def apply_feature_mask(
 ) -> torch.Tensor:
     keep = coalition_mask.to(dtype=torch.bool, device=x.device)
     baseline = baseline.to(dtype=x.dtype, device=x.device)
-    return torch.where(keep.unsqueeze(0), x, baseline.unsqueeze(0).expand_as(x))
+    if keep.ndim == 1:
+        keep = keep.unsqueeze(0).expand_as(x)
+    if baseline.ndim == 1:
+        baseline = baseline.unsqueeze(0).expand_as(x)
+    return torch.where(keep, x, baseline)

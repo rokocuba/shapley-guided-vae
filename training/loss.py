@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
+from shapley.blocks import FeatureBlockIndex
+
 
 @dataclass(slots=True)
 class LossOutput:
@@ -30,6 +32,27 @@ class DynamicWeightedVAELoss(nn.Module):
         if normalize:
             w = w / (w.sum() + 1e-12)
         self.feature_weights.copy_(w)
+
+    @torch.no_grad()
+    def set_uniform_feature_weights(self) -> None:
+        self.feature_weights.fill_(1.0 / self.feature_weights.numel())
+
+    @torch.no_grad()
+    def set_block_weights(
+        self,
+        block_weights: torch.Tensor,
+        block_index: FeatureBlockIndex,
+    ) -> None:
+        if block_index.input_dim != self.feature_weights.numel():
+            raise ValueError(
+                f"Block index input_dim {block_index.input_dim} does not match "
+                f"loss input_dim {self.feature_weights.numel()}."
+            )
+        feature_weights = block_index.expand_block_weights(
+            block_weights,
+            device=self.feature_weights.device,
+        )
+        self.set_feature_weights(feature_weights, normalize=True)
 
     def forward(
         self,

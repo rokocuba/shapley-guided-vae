@@ -13,10 +13,17 @@ from training import (
     BetaWarmupCallback,
     DynamicWeightedVAELoss,
     KLBetaSchedulerCallback,
+    ShapleyTrainingConfig,
     Trainer,
     plot_feature_difference_distributions,
+    run_shapley_training,
     save_training_run,
     update_training_run_artifacts,
+)
+from shapley import (
+    BlockShapleyEstimator,
+    FeatureBlockIndex,
+    make_baseline_provider,
 )
 from utils import fit_feature_scaler, load_dataset_bundle, transform_features
 
@@ -42,6 +49,50 @@ def _parse_hidden_dims(value: str) -> tuple[int, ...]:
     if not dims:
         raise ValueError("hidden_dims must contain at least one integer.")
     return dims
+
+
+def _make_run_data_info(
+    *,
+    bundle: object,
+    x_scaled: torch.Tensor,
+    train_tensor: torch.Tensor,
+    test_tensor: torch.Tensor,
+    scaler: object | None,
+    data_dir: str | Path,
+) -> dict[str, object]:
+    feature_group_names: list[str] = []
+    feature_group_sizes: list[int] = []
+    for group_name in bundle.feature_groups:
+        if not feature_group_names or feature_group_names[-1] != group_name:
+            feature_group_names.append(group_name)
+            feature_group_sizes.append(1)
+        else:
+            feature_group_sizes[-1] += 1
+    class_names = None
+    if bundle.sample_labels is not None:
+        class_names = [str(value) for value in pd.unique(bundle.sample_labels)]
+    scaler_mean = None
+    scaler_scale = None
+    if scaler is not None:
+        if scaler.mean_ is None or scaler.scale_ is None:
+            raise RuntimeError("Scaler is missing fitted statistics.")
+        scaler_mean = [float(v) for v in scaler.mean_]
+        scaler_scale = [float(v) for v in scaler.scale_]
+    return {
+        "data_dir": str(data_dir),
+        "dataset_name": bundle.dataset_name,
+        "n_rows": int(x_scaled.shape[0]),
+        "n_rows_train": int(train_tensor.shape[0]),
+        "n_rows_test": int(test_tensor.shape[0]),
+        "n_features": int(x_scaled.shape[1]),
+        "feature_names": bundle.feature_names,
+        "feature_group_names": feature_group_names,
+        "feature_group_sizes": feature_group_sizes,
+        "label_name": bundle.label_name,
+        "class_names": class_names,
+        "scaler_mean": scaler_mean,
+        "scaler_scale": scaler_scale,
+    }
 
 
 def run_baseline(
@@ -297,6 +348,202 @@ def run_baseline(
     return history
 
 
+def run_shapley_experiment(
+    data_dir: str | Path = "data",
+    dataset_name: str = "mfeat",
+    epochs: int = 2000,
+    batch_size: int = 2048,
+    lr: float = 1e-3,
+    latent_dim: int = 5,
+    hidden_dims: tuple[int, ...] | list[int] = (1024, 1024),
+    test_size: float = 0.2,
+    split_seed: int = 555,
+    input_dropout: float = 0.0,
+    normalize_features: bool = True,
+    deterministic_latent: bool = False,
+    beta: float = 0.08,
+    device: str | None = None,
+    output_dir: str | Path = "analysis/output/training_runs",
+    shapley_tactic: str = "baseline",
+    shapley_warmup_epochs: int = 100,
+    shapley_min_sampling_phases_before_c: int = 5,
+    shapley_group_size: int = 16,
+    shapley_sampling_batch_size: int = 512,
+    shapley_phase_c_epochs: int = 1,
+    shapley_all_nonpositive_policy: str = "error",
+) -> list[dict[str, object]]:
+    bundle = load_dataset_bundle(data_dir=data_dir, dataset_name=dataset_name)
+    train_idx, test_idx = _make_split_indices(
+        n_total=bundle.x_raw.shape[0],
+        test_size=test_size,
+        split_seed=split_seed,
+    )
+    scaler = (
+        fit_feature_scaler(bundle.x_raw[train_idx.numpy()])
+        if normalize_features
+        else None
+    )
+    x_scaled = torch.from_numpy(transform_features(bundle.x_raw, scaler))
+    hidden_dims_tuple = tuple(int(v) for v in hidden_dims)
+    model = VAE(
+        VAEConfig(
+            input_dim=x_scaled.shape[1],
+            hidden_dims=hidden_dims_tuple,
+            latent_dim=latent_dim,
+            input_dropout=input_dropout,
+            deterministic_latent=deterministic_latent,
+        )
+    )
+    loss_fn = DynamicWeightedVAELoss(input_dim=x_scaled.shape[1], beta=beta)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    callbacks = [
+        KLBetaSchedulerCallback(
+            target_kl=3.0,
+            step_size=0.01,
+            min_beta=0.0,
+            max_beta=10.0,
+            target_start=30.0,
+            target_warmup_epochs=max(1, int(round(0.75 * epochs))),
+            target_curve="reciprocal",
+            warmup_step_limit=0.001,
+            beta_zero_epochs=10,
+        )
+    ]
+    trainer = Trainer(
+        model=model,
+        optimizer=optimizer,
+        loss_fn=loss_fn,
+        device=device or ("cuda" if torch.cuda.is_available() else "cpu"),
+        callbacks=callbacks,
+        scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=0.9,
+            patience=15,
+            threshold=1e-4,
+            min_lr=1e-5,
+        ),
+        scheduler_monitor="loss",
+    )
+    train_tensor = x_scaled[train_idx]
+    test_tensor = x_scaled[test_idx]
+    train_dataset = cast(Dataset[torch.Tensor], train_tensor)
+    test_dataset = cast(Dataset[torch.Tensor], test_tensor)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    block_index = FeatureBlockIndex.from_feature_groups(bundle.feature_groups)
+    labels_train = None
+    if bundle.sample_labels is not None:
+        labels_train = torch.as_tensor(bundle.sample_labels[train_idx.numpy()])
+    baseline_provider = make_baseline_provider(
+        shapley_tactic,
+        train_tensor,
+        labels_train=labels_train,
+    )
+    estimator = BlockShapleyEstimator(
+        model=trainer.model,
+        block_index=block_index,
+        baseline_provider=baseline_provider,
+        group_size=shapley_group_size,
+    )
+    result = run_shapley_training(
+        trainer=trainer,
+        train_loader=train_loader,
+        train_tensor=train_tensor,
+        estimator=estimator,
+        block_index=block_index,
+        config=ShapleyTrainingConfig(
+            total_epochs=epochs,
+            warmup_epochs=shapley_warmup_epochs,
+            min_sampling_phases_before_c=shapley_min_sampling_phases_before_c,
+            phase_c_epochs=shapley_phase_c_epochs,
+            sampling_batch_size=shapley_sampling_batch_size,
+            all_nonpositive_policy=shapley_all_nonpositive_policy,
+        ),
+        val_loader=test_loader,
+        train_labels=labels_train,
+    )
+
+    run_dir = save_training_run(
+        model=model,
+        history=trainer.state.history,
+        state=trainer.state,
+        config={
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "lr": lr,
+            "latent_dim": latent_dim,
+            "dataset_name": bundle.dataset_name,
+            "test_size": test_size,
+            "split_seed": split_seed,
+            "hidden_dims": list(model.config.hidden_dims),
+            "input_dropout": input_dropout,
+            "normalize_features": normalize_features,
+            "deterministic_latent": deterministic_latent,
+            "beta": beta,
+            "beta_controller": "kl_target",
+            "device": str(trainer.device),
+            "shapley": {
+                "players": list(block_index.names),
+                "tactic": shapley_tactic,
+                "warmup_epochs": shapley_warmup_epochs,
+                "group_size": shapley_group_size,
+                "sampling_batch_size": shapley_sampling_batch_size,
+                "min_sampling_phases_before_c": shapley_min_sampling_phases_before_c,
+                "phase_c_epochs": shapley_phase_c_epochs,
+                "node_effective_count_unit": "rows",
+                "node_effective_count_max": 256,
+                "node_forgetting_signal": "global_reconstruction_progress",
+                "all_nonpositive_policy": shapley_all_nonpositive_policy,
+            },
+        },
+        data_info=_make_run_data_info(
+            bundle=bundle,
+            x_scaled=x_scaled,
+            train_tensor=train_tensor,
+            test_tensor=test_tensor,
+            scaler=scaler,
+            data_dir=data_dir,
+        ),
+        output_dir=output_dir,
+        training_type="shapley",
+        shapley_tactic=shapley_tactic,
+    )
+    run_dir = Path(run_dir)
+    weights_csv = run_dir / "shapley_weights.csv"
+    node_stats_csv = run_dir / "shapley_node_stats.csv"
+    phase_timing_csv = run_dir / "shapley_phase_timing.csv"
+    pd.DataFrame(result.shapley_weight_rows).to_csv(weights_csv, index=False)
+    pd.DataFrame(result.node_stat_rows).to_csv(node_stats_csv, index=False)
+    pd.DataFrame(result.phase_timing_rows).to_csv(phase_timing_csv, index=False)
+    residual_png = run_dir / "feature_difference_distributions.png"
+    residual_summary_csv = run_dir / "feature_difference_summary.csv"
+    plot_feature_difference_distributions(
+        model=model,
+        x_scaled=test_tensor,
+        feature_names=bundle.feature_names,
+        scaler=scaler,
+        out_png=residual_png,
+        out_summary_csv=residual_summary_csv,
+        device=trainer.device,
+        use_mean_latent=True,
+        title_suffix="test split, deterministic(mu)",
+    )
+    update_training_run_artifacts(
+        run_dir,
+        {
+            "shapley_weights_csv": str(weights_csv),
+            "shapley_node_stats_csv": str(node_stats_csv),
+            "shapley_phase_timing_csv": str(phase_timing_csv),
+            "feature_difference_distributions_png": str(residual_png),
+            "feature_difference_summary_csv": str(residual_summary_csv),
+        },
+    )
+    print(f"saved_run={run_dir}")
+    return trainer.state.history
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
@@ -337,7 +584,33 @@ def main() -> None:
     parser.add_argument("--beta-start", type=float, default=0.0)
     parser.add_argument("--beta-warmup-epochs", type=int, default=100)
     parser.add_argument("--device", type=str, default=None)
-    parser.add_argument("--training-type", type=str, default="baseline")
+    parser.add_argument(
+        "--training-type",
+        type=str,
+        choices=("baseline", "shapley"),
+        default="baseline",
+    )
+    parser.add_argument(
+        "--shapley-tactic",
+        type=str,
+        choices=("baseline", "marginal", "conditional"),
+        default="baseline",
+    )
+    parser.add_argument("--shapley-warmup-epochs", type=int, default=100)
+    parser.add_argument(
+        "--shapley-min-sampling-phases-before-c",
+        type=int,
+        default=5,
+    )
+    parser.add_argument("--shapley-group-size", type=int, default=16)
+    parser.add_argument("--shapley-sampling-batch-size", type=int, default=512)
+    parser.add_argument("--shapley-phase-c-epochs", type=int, default=1)
+    parser.add_argument(
+        "--shapley-all-nonpositive-policy",
+        type=str,
+        choices=("error", "flip_negative", "uniform"),
+        default="error",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -345,45 +618,70 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    history = run_baseline(
-        data_dir=args.data_dir,
-        dataset_name=args.dataset_name,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        lr=args.lr,
-        lr_scheduler=args.lr_scheduler,
-        lr_scheduler_monitor=args.lr_scheduler_monitor,
-        lr_min=args.lr_min,
-        lr_plateau_factor=args.lr_plateau_factor,
-        lr_plateau_patience=args.lr_plateau_patience,
-        lr_plateau_threshold=args.lr_plateau_threshold,
-        latent_dim=args.latent_dim,
-        hidden_dims=_parse_hidden_dims(args.hidden_dims),
-        test_size=args.test_size,
-        split_seed=args.split_seed,
-        input_dropout=args.input_dropout,
-        normalize_features=not args.no_normalize_features,
-        deterministic_latent=args.deterministic_latent,
-        beta=args.beta,
-        beta_controller=args.beta_controller,
-        kl_target=args.kl_target,
-        kl_target_start=args.kl_target_start,
-        kl_target_warmup_epochs=args.kl_target_warmup_epochs,
-        kl_target_curve=args.kl_target_curve,
-        beta_scheduler_step=args.beta_scheduler_step,
-        beta_warmup_step_limit=args.beta_warmup_step_limit,
-        beta_zero_epochs=args.beta_zero_epochs,
-        beta_min=args.beta_min,
-        beta_max=args.beta_max,
-        beta_warmup=args.beta_warmup,
-        beta_start=args.beta_start,
-        beta_warmup_epochs=args.beta_warmup_epochs,
-        device=args.device,
-        training_type=args.training_type,
-        output_dir=args.output_dir,
-    )
+    if args.training_type == "shapley":
+        history = run_shapley_experiment(
+            data_dir=args.data_dir,
+            dataset_name=args.dataset_name,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            latent_dim=args.latent_dim,
+            hidden_dims=_parse_hidden_dims(args.hidden_dims),
+            test_size=args.test_size,
+            split_seed=args.split_seed,
+            input_dropout=args.input_dropout,
+            normalize_features=not args.no_normalize_features,
+            deterministic_latent=args.deterministic_latent,
+            beta=args.beta,
+            device=args.device,
+            output_dir=args.output_dir,
+            shapley_tactic=args.shapley_tactic,
+            shapley_warmup_epochs=args.shapley_warmup_epochs,
+            shapley_min_sampling_phases_before_c=args.shapley_min_sampling_phases_before_c,
+            shapley_group_size=args.shapley_group_size,
+            shapley_sampling_batch_size=args.shapley_sampling_batch_size,
+            shapley_phase_c_epochs=args.shapley_phase_c_epochs,
+            shapley_all_nonpositive_policy=args.shapley_all_nonpositive_policy,
+        )
+    else:
+        history = run_baseline(
+            data_dir=args.data_dir,
+            dataset_name=args.dataset_name,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            lr_scheduler=args.lr_scheduler,
+            lr_scheduler_monitor=args.lr_scheduler_monitor,
+            lr_min=args.lr_min,
+            lr_plateau_factor=args.lr_plateau_factor,
+            lr_plateau_patience=args.lr_plateau_patience,
+            lr_plateau_threshold=args.lr_plateau_threshold,
+            latent_dim=args.latent_dim,
+            hidden_dims=_parse_hidden_dims(args.hidden_dims),
+            test_size=args.test_size,
+            split_seed=args.split_seed,
+            input_dropout=args.input_dropout,
+            normalize_features=not args.no_normalize_features,
+            deterministic_latent=args.deterministic_latent,
+            beta=args.beta,
+            beta_controller=args.beta_controller,
+            kl_target=args.kl_target,
+            kl_target_start=args.kl_target_start,
+            kl_target_warmup_epochs=args.kl_target_warmup_epochs,
+            kl_target_curve=args.kl_target_curve,
+            beta_scheduler_step=args.beta_scheduler_step,
+            beta_warmup_step_limit=args.beta_warmup_step_limit,
+            beta_zero_epochs=args.beta_zero_epochs,
+            beta_min=args.beta_min,
+            beta_max=args.beta_max,
+            beta_warmup=args.beta_warmup,
+            beta_start=args.beta_start,
+            beta_warmup_epochs=args.beta_warmup_epochs,
+            device=args.device,
+            training_type=args.training_type,
+            output_dir=args.output_dir,
+        )
     print(history[-1])
-    # TODO: add Shapley callback wiring and experiment configuration.
 
 
 if __name__ == "__main__":

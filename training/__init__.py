@@ -7,6 +7,7 @@ from .results import (
     save_training_run,
     update_training_run_artifacts,
 )
+from .shapley import ShapleyTrainingConfig, ShapleyTrainingResult, run_shapley_training
 from .trainer import Trainer
 
 __all__ = [
@@ -20,4 +21,7 @@ __all__ = [
     "load_training_runs",
     "save_training_run",
     "update_training_run_artifacts",
+    "ShapleyTrainingConfig",
+    "ShapleyTrainingResult",
+    "run_shapley_training",
 ]
