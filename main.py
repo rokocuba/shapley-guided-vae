@@ -99,7 +99,7 @@ def run_baseline(
     data_dir: str | Path = "data",
     dataset_name: str = "mfeat",
     epochs: int = 2000,
-    batch_size: int = 2048,
+    batch_size: int = 256,
     lr: float = 1e-3,
     lr_scheduler: str | None = "plateau",
     lr_scheduler_monitor: str = "loss",
@@ -352,7 +352,7 @@ def run_shapley_experiment(
     data_dir: str | Path = "data",
     dataset_name: str = "mfeat",
     epochs: int = 2000,
-    batch_size: int = 2048,
+    batch_size: int = 256,
     lr: float = 1e-3,
     latent_dim: int = 5,
     hidden_dims: tuple[int, ...] | list[int] = (1024, 1024),
@@ -549,7 +549,7 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--dataset-name", type=str, default="mfeat")
     parser.add_argument("--epochs", type=int, default=2000)
-    parser.add_argument("--batch-size", type=int, default=1024)
+    parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--lr-scheduler", type=str, default="plateau")
     parser.add_argument("--lr-scheduler-monitor", type=str, default="loss")
