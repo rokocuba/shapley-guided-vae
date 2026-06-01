@@ -148,6 +148,7 @@ def run_baseline(
     hidden_dims_tuple = tuple(int(v) for v in hidden_dims)
     if len(hidden_dims_tuple) == 0:
         raise ValueError("hidden_dims must contain at least one layer width.")
+    block_index = FeatureBlockIndex.from_feature_groups(bundle.feature_groups)
     model = VAE(
         VAEConfig(
             input_dim=x_scaled.shape[1],
@@ -158,6 +159,7 @@ def run_baseline(
         )
     )
     loss_fn = DynamicWeightedVAELoss(input_dim=x_scaled.shape[1], beta=beta)
+    loss_fn.set_base_feature_weights(block_index.equal_block_feature_weights())
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     beta_controller_name = beta_controller.strip().lower()
     resolved_kl_target = None
@@ -302,6 +304,8 @@ def run_baseline(
             "beta_start": beta_start,
             "beta_warmup_epochs": beta_warmup_epochs,
             "device": str(trainer.device),
+            "reconstruction_loss": "block_normalized_mse",
+            "base_feature_weighting": "equal_block_mass",
         },
         data_info={
             "data_dir": str(data_dir),
@@ -354,6 +358,12 @@ def run_shapley_experiment(
     epochs: int = 2000,
     batch_size: int = 256,
     lr: float = 1e-3,
+    lr_scheduler: str | None = "plateau",
+    lr_scheduler_monitor: str = "loss",
+    lr_min: float = 1e-8,
+    lr_plateau_factor: float = 0.9,
+    lr_plateau_patience: int = 15,
+    lr_plateau_threshold: float = 1e-4,
     latent_dim: int = 5,
     hidden_dims: tuple[int, ...] | list[int] = (1024, 1024),
     test_size: float = 0.2,
@@ -362,6 +372,19 @@ def run_shapley_experiment(
     normalize_features: bool = True,
     deterministic_latent: bool = False,
     beta: float = 0.08,
+    beta_controller: str = "kl_target",
+    kl_target: float | None = 3.0,
+    kl_target_start: float | None = None,
+    kl_target_warmup_epochs: int | None = None,
+    kl_target_curve: str = "reciprocal",
+    beta_scheduler_step: float = 0.01,
+    beta_warmup_step_limit: float | None = 0.001,
+    beta_zero_epochs: int = 10,
+    beta_min: float = 0.0,
+    beta_max: float = 10.0,
+    beta_warmup: str | None = "linear",
+    beta_start: float = 0.0,
+    beta_warmup_epochs: int = 100,
     device: str | None = None,
     output_dir: str | Path = "analysis/output/training_runs",
     shapley_tactic: str = "baseline",
@@ -385,6 +408,7 @@ def run_shapley_experiment(
     )
     x_scaled = torch.from_numpy(transform_features(bundle.x_raw, scaler))
     hidden_dims_tuple = tuple(int(v) for v in hidden_dims)
+    block_index = FeatureBlockIndex.from_feature_groups(bundle.feature_groups)
     model = VAE(
         VAEConfig(
             input_dim=x_scaled.shape[1],
@@ -395,35 +419,85 @@ def run_shapley_experiment(
         )
     )
     loss_fn = DynamicWeightedVAELoss(input_dim=x_scaled.shape[1], beta=beta)
+    loss_fn.set_base_feature_weights(block_index.equal_block_feature_weights())
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    callbacks = [
-        KLBetaSchedulerCallback(
-            target_kl=3.0,
-            step_size=0.01,
-            min_beta=0.0,
-            max_beta=10.0,
-            target_start=30.0,
-            target_warmup_epochs=max(1, int(round(0.75 * epochs))),
-            target_curve="reciprocal",
-            warmup_step_limit=0.001,
-            beta_zero_epochs=10,
+    beta_controller_name = beta_controller.strip().lower()
+    resolved_kl_target = None
+    resolved_kl_target_start = None
+    resolved_kl_target_warmup_epochs = 0
+    scheduler = None
+    if lr_scheduler is not None:
+        scheduler_name = lr_scheduler.strip().lower()
+        if scheduler_name == "cosine":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=max(1, epochs),
+                eta_min=float(lr_min),
+            )
+        elif scheduler_name == "plateau":
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="min",
+                factor=float(lr_plateau_factor),
+                patience=int(lr_plateau_patience),
+                threshold=float(lr_plateau_threshold),
+                min_lr=float(lr_min),
+            )
+        else:
+            raise ValueError(
+                "Unknown lr_scheduler. Supported values: 'cosine', 'plateau' or None."
+            )
+    callbacks = []
+    if beta_controller_name == "kl_target":
+        resolved_kl_target = 3.0 if kl_target is None else float(kl_target)
+        resolved_kl_target_start = (
+            10.0 * resolved_kl_target
+            if kl_target_start is None
+            else max(float(kl_target_start), resolved_kl_target)
         )
-    ]
+        resolved_kl_target_warmup_epochs = (
+            max(1, int(round(0.75 * epochs)))
+            if kl_target_warmup_epochs is None
+            else int(kl_target_warmup_epochs)
+        )
+        callbacks.append(
+            KLBetaSchedulerCallback(
+                target_kl=resolved_kl_target,
+                step_size=beta_scheduler_step,
+                min_beta=beta_min,
+                max_beta=beta_max,
+                target_start=resolved_kl_target_start,
+                target_warmup_epochs=resolved_kl_target_warmup_epochs,
+                target_curve=kl_target_curve,
+                warmup_step_limit=beta_warmup_step_limit,
+                beta_zero_epochs=beta_zero_epochs,
+            )
+        )
+    elif beta_controller_name == "warmup":
+        if beta_warmup is None:
+            raise ValueError(
+                "beta_warmup must be set when beta_controller is 'warmup'."
+            )
+        callbacks.append(
+            BetaWarmupCallback(
+                target_beta=beta,
+                warmup_epochs=beta_warmup_epochs,
+                strategy=beta_warmup,
+                start_beta=beta_start,
+            )
+        )
+    else:
+        raise ValueError(
+            "Unknown beta_controller. Supported values: 'kl_target' and 'warmup'."
+        )
     trainer = Trainer(
         model=model,
         optimizer=optimizer,
         loss_fn=loss_fn,
         device=device or ("cuda" if torch.cuda.is_available() else "cpu"),
         callbacks=callbacks,
-        scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode="min",
-            factor=0.9,
-            patience=15,
-            threshold=1e-4,
-            min_lr=1e-5,
-        ),
-        scheduler_monitor="loss",
+        scheduler=scheduler,
+        scheduler_monitor=lr_scheduler_monitor,
     )
     train_tensor = x_scaled[train_idx]
     test_tensor = x_scaled[test_idx]
@@ -432,7 +506,6 @@ def run_shapley_experiment(
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    block_index = FeatureBlockIndex.from_feature_groups(bundle.feature_groups)
     labels_train = None
     if bundle.sample_labels is not None:
         labels_train = torch.as_tensor(bundle.sample_labels[train_idx.numpy()])
@@ -473,6 +546,12 @@ def run_shapley_experiment(
             "epochs": epochs,
             "batch_size": batch_size,
             "lr": lr,
+            "lr_scheduler": lr_scheduler,
+            "lr_scheduler_monitor": lr_scheduler_monitor,
+            "lr_min": lr_min,
+            "lr_plateau_factor": lr_plateau_factor,
+            "lr_plateau_patience": lr_plateau_patience,
+            "lr_plateau_threshold": lr_plateau_threshold,
             "latent_dim": latent_dim,
             "dataset_name": bundle.dataset_name,
             "test_size": test_size,
@@ -482,8 +561,22 @@ def run_shapley_experiment(
             "normalize_features": normalize_features,
             "deterministic_latent": deterministic_latent,
             "beta": beta,
-            "beta_controller": "kl_target",
+            "beta_controller": beta_controller_name,
+            "kl_target": resolved_kl_target,
+            "kl_target_start": resolved_kl_target_start,
+            "kl_target_warmup_epochs": resolved_kl_target_warmup_epochs,
+            "kl_target_curve": kl_target_curve,
+            "beta_scheduler_step": beta_scheduler_step,
+            "beta_warmup_step_limit": beta_warmup_step_limit,
+            "beta_zero_epochs": beta_zero_epochs,
+            "beta_min": beta_min,
+            "beta_max": beta_max,
+            "beta_warmup": beta_warmup,
+            "beta_start": beta_start,
+            "beta_warmup_epochs": beta_warmup_epochs,
             "device": str(trainer.device),
+            "reconstruction_loss": "block_normalized_mse",
+            "base_feature_weighting": "equal_block_mass",
             "shapley": {
                 "players": list(block_index.names),
                 "tactic": shapley_tactic,
@@ -625,6 +718,12 @@ def main() -> None:
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,
+            lr_scheduler=args.lr_scheduler,
+            lr_scheduler_monitor=args.lr_scheduler_monitor,
+            lr_min=args.lr_min,
+            lr_plateau_factor=args.lr_plateau_factor,
+            lr_plateau_patience=args.lr_plateau_patience,
+            lr_plateau_threshold=args.lr_plateau_threshold,
             latent_dim=args.latent_dim,
             hidden_dims=_parse_hidden_dims(args.hidden_dims),
             test_size=args.test_size,
@@ -633,6 +732,19 @@ def main() -> None:
             normalize_features=not args.no_normalize_features,
             deterministic_latent=args.deterministic_latent,
             beta=args.beta,
+            beta_controller=args.beta_controller,
+            kl_target=args.kl_target,
+            kl_target_start=args.kl_target_start,
+            kl_target_warmup_epochs=args.kl_target_warmup_epochs,
+            kl_target_curve=args.kl_target_curve,
+            beta_scheduler_step=args.beta_scheduler_step,
+            beta_warmup_step_limit=args.beta_warmup_step_limit,
+            beta_zero_epochs=args.beta_zero_epochs,
+            beta_min=args.beta_min,
+            beta_max=args.beta_max,
+            beta_warmup=args.beta_warmup,
+            beta_start=args.beta_start,
+            beta_warmup_epochs=args.beta_warmup_epochs,
             device=args.device,
             output_dir=args.output_dir,
             shapley_tactic=args.shapley_tactic,

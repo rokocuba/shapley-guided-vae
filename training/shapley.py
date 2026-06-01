@@ -75,12 +75,23 @@ def _train_one_epoch(
     phase: str,
     elapsed_train_sec: float,
     val_loader: DataLoader[torch.Tensor] | None = None,
+    advance_epoch_controls: bool = True,
 ) -> tuple[dict[str, Any], float]:
     epoch_started = perf_counter()
     trainer.state.epoch = epoch
     trainer.model.train()
-    trainer.callbacks.call("on_epoch_begin", trainer, epoch, logs={"phase": phase})
-    running: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0}
+    control_logs = {
+        "phase": phase,
+        "advance_epoch_controls": advance_epoch_controls,
+    }
+    trainer.callbacks.call("on_epoch_begin", trainer, epoch, logs=control_logs)
+    running: dict[str, float] = {
+        "loss": 0.0,
+        "recon": 0.0,
+        "recon_base": 0.0,
+        "recon_unweighted": 0.0,
+        "kl": 0.0,
+    }
     n_batches = 0
     for batch_idx, x in enumerate(loader):
         trainer.state.batch = batch_idx
@@ -106,6 +117,8 @@ def _train_one_epoch(
     epoch_logs.update(
         {
             "phase": phase,
+            "logical_epoch": epoch,
+            "advance_epoch_controls": advance_epoch_controls,
             "beta": float(trainer.loss_fn.beta),
             "lr": float(trainer.optimizer.param_groups[0]["lr"]),
             "epoch_duration_sec": float(epoch_duration_sec),
@@ -115,7 +128,7 @@ def _train_one_epoch(
     trainer.state.history.append(epoch_logs)
     trainer.state.epoch_durations_sec.append(epoch_duration_sec)
     trainer.callbacks.call("on_epoch_end", trainer, epoch, logs=epoch_logs)
-    if trainer.scheduler is not None:
+    if advance_epoch_controls and trainer.scheduler is not None:
         if trainer.scheduler.__class__.__name__ == "ReduceLROnPlateau":
             monitor_key = trainer.scheduler_monitor
             if monitor_key not in epoch_logs:
@@ -152,7 +165,7 @@ def run_shapley_training(
     applied_block_weights: torch.Tensor | None = None
     trainer.callbacks.call("on_train_begin", trainer, logs={"training_type": "shapley"})
     for epoch in range(config.total_epochs):
-        trainer.loss_fn.set_uniform_feature_weights()
+        trainer.loss_fn.set_base_feature_weights()
         logs, elapsed_train_sec = _train_one_epoch(
             trainer,
             train_loader,
@@ -231,11 +244,12 @@ def run_shapley_training(
                     phase="C",
                     elapsed_train_sec=elapsed_train_sec,
                     val_loader=val_loader,
+                    advance_epoch_controls=False,
                 )
                 c_logs["cycle"] = cycle
                 c_logs["sampling_phase"] = sampling_phase
                 c_logs["phase_c_epoch"] = c_epoch
-        trainer.loss_fn.set_uniform_feature_weights()
+        trainer.loss_fn.set_base_feature_weights()
         result.phase_timing_rows.append(
             {
                 "epoch_start": epoch,

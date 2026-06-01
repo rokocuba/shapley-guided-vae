@@ -10,12 +10,12 @@ import numpy as np
 import pandas as pd
 import torch
 from sklearn.decomposition import PCA
-from torch.utils.data import TensorDataset, random_split
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from shapley import FeatureBlockIndex
 from utils import fit_feature_scaler, load_dataset_bundle, transform_features
 
 
@@ -57,15 +57,13 @@ def load_scaled_data_and_metadata(
 def make_split_indices(
     n_rows: int, test_size: float, split_seed: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    base = TensorDataset(torch.arange(n_rows))
     n_test = int(n_rows * test_size)
     n_test = max(1, min(n_rows - 1, n_test))
-    n_train = n_rows - n_test
     generator = torch.Generator().manual_seed(split_seed)
-    train_set, test_set = random_split(base, [n_train, n_test], generator=generator)
-    return np.asarray(train_set.indices, dtype=int), np.asarray(
-        test_set.indices, dtype=int
-    )
+    permutation = torch.randperm(n_rows, generator=generator).numpy()
+    test_idx = permutation[:n_test]
+    train_idx = permutation[n_test:]
+    return np.asarray(train_idx, dtype=int), np.asarray(test_idx, dtype=int)
 
 
 def evaluate_mean_predictors(
@@ -79,6 +77,11 @@ def evaluate_mean_predictors(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     x_train = x_scaled[train_idx]
     x_test = x_scaled[test_idx]
+    base_weights = (
+        FeatureBlockIndex.from_feature_groups(feature_groups)
+        .equal_block_feature_weights()
+        .numpy()
+    )
 
     predictors = {
         "global_mean": np.repeat(x_train.mean(axis=0)[None, :], len(test_idx), axis=0)
@@ -100,7 +103,7 @@ def evaluate_mean_predictors(
     for predictor_name, preds in predictors.items():
         sq_error = (preds - x_test) ** 2
         feature_mse = sq_error.mean(axis=0)
-        recon = float(feature_mse.mean())
+        recon = float((feature_mse * base_weights).sum())
         mae = float(np.abs(preds - x_test).mean())
         rmse = float(np.sqrt(sq_error.mean()))
         summary_rows.append(
@@ -139,6 +142,11 @@ def evaluate_pca_predictors(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     x_train = x_scaled[train_idx]
     x_test = x_scaled[test_idx]
+    base_weights = (
+        FeatureBlockIndex.from_feature_groups(feature_groups)
+        .equal_block_feature_weights()
+        .numpy()
+    )
 
     summary_rows: list[dict[str, float | int | str]] = []
     feature_rows: list[dict[str, float | str]] = []
@@ -148,7 +156,7 @@ def evaluate_pca_predictors(
         preds = pca.inverse_transform(pca.transform(x_test))
         sq_error = (preds - x_test) ** 2
         feature_mse = sq_error.mean(axis=0)
-        recon = float(feature_mse.mean())
+        recon = float((feature_mse * base_weights).sum())
         mae = float(np.abs(preds - x_test).mean())
         rmse = float(np.sqrt(sq_error.mean()))
         summary_rows.append(
@@ -215,14 +223,31 @@ def _extract_pca_dim(label: str) -> int | None:
 def build_model_frame(out_dir: Path) -> pd.DataFrame:
     summary = pd.read_csv(out_dir / "run_summary.csv")
     history = pd.read_csv(out_dir / "run_history.csv")
+    val_metric = (
+        "val_recon_base" if "val_recon_base" in history.columns else "val_recon"
+    )
+    final_metric = (
+        "final_val_recon_base"
+        if "final_val_recon_base" in summary.columns
+        else "final_val_recon"
+    )
     best = (
-        history.groupby(["run_id", "training_type"], as_index=False)["val_recon"]
+        history.groupby(["run_id", "training_type"], as_index=False)[val_metric]
         .min()
-        .rename({"val_recon": "best_val_recon"}, axis=1)
+        .rename({val_metric: "best_val_recon"}, axis=1)
     )
     merged = summary.merge(best, on=["run_id", "training_type"], how="left")
-    merged = merged.rename(columns={"training_type": "label"})
+
+    # If a shapley tactic is present, include it next to the training type for plotting/labels
+    def _make_label(r: pd.Series) -> str:
+        tactic = r.get("shapley_tactic") if "shapley_tactic" in r else None
+        if pd.notna(tactic) and tactic not in ("", "none"):
+            return f"{r['training_type']} ({tactic})"
+        return r["training_type"]
+
+    merged["label"] = merged.apply(_make_label, axis=1)
     merged["entry_type"] = "vae"
+    merged["final_val_recon"] = merged[final_metric]
     return merged[
         [
             "entry_type",
@@ -243,24 +268,48 @@ def plot_reconstruction_comparison(
     fig, ax = plt.subplots(figsize=(11, 6))
     y = np.arange(len(plot_df))
     ax.scatter(
-        plot_df["best_val_recon"], y, s=70, label="best val_recon", color="#1f77b4"
-    )
-    ax.scatter(
         plot_df["final_val_recon"],
         y,
         s=70,
-        label="final val_recon",
+        label="final val_recon_base",
         color="#ff7f0e",
         marker="s",
     )
 
     for _, row in plot_df[plot_df["entry_type"] == "baseline"].iterrows():
-        ax.axvline(row["best_val_recon"], linewidth=1.2, linestyle="--", alpha=0.8)
+        ax.axvline(row["final_val_recon"], linewidth=1.2, linestyle="--", alpha=0.8)
 
     ax.set_yticks(y)
     ax.set_yticklabels(plot_df["label"])
-    ax.set_xlabel("validation reconstruction loss (scaled feature MSE)")
+    ax.set_xlabel("final validation reconstruction loss (block-normalized MSE)")
     ax.set_title(f"{dataset_name} runs vs simple baselines")
+    ax.grid(axis="x", alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+
+
+def plot_vae_kl_comparison(
+    comparison: pd.DataFrame, out_path: Path, dataset_name: str
+) -> None:
+    plot_df = comparison.loc[comparison["entry_type"] == "vae"].copy()
+    plot_df = plot_df.sort_values("final_val_kl")
+    fig, ax = plt.subplots(figsize=(11, 6))
+    y = np.arange(len(plot_df))
+    ax.scatter(
+        plot_df["final_val_kl"],
+        y,
+        s=70,
+        label="final val KL",
+        color="#2ca02c",
+        marker="o",
+    )
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(plot_df["label"])
+    ax.set_xlabel("final validation KL loss")
+    ax.set_title(f"{dataset_name} VAE runs KL loss comparison")
     ax.grid(axis="x", alpha=0.25)
     ax.legend()
     fig.tight_layout()
@@ -429,12 +478,12 @@ def main() -> None:
     if not model_df.empty:
         if class_baseline is not None and class_baseline_label is not None:
             model_df[f"gap_vs_{class_baseline_label}"] = (
-                model_df["best_val_recon"] - class_baseline
+                model_df["final_val_recon"] - class_baseline
             )
             model_df[f"relative_to_{class_baseline_label}_pct"] = (
                 100.0 * model_df[f"gap_vs_{class_baseline_label}"] / class_baseline
             )
-        model_df["gap_vs_global_mean"] = model_df["best_val_recon"] - global_baseline
+        model_df["gap_vs_global_mean"] = model_df["final_val_recon"] - global_baseline
         model_df["relative_to_global_mean_pct"] = (
             100.0 * model_df["gap_vs_global_mean"] / global_baseline
         )
@@ -455,7 +504,7 @@ def main() -> None:
 
     comparison = pd.concat([baseline_summary, model_df], ignore_index=True, sort=False)
     comparison = comparison.sort_values(
-        ["best_val_recon", "final_val_recon"], na_position="last"
+        ["final_val_recon", "best_val_recon"], na_position="last"
     )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -466,6 +515,9 @@ def main() -> None:
     )
     plot_feature_baselines(
         feature_df, args.out_dir / "mean_baseline_feature_mse.png", args.dataset_name
+    )
+    plot_vae_kl_comparison(
+        comparison, args.out_dir / "vae_kl_comparison.png", args.dataset_name
     )
     print(f"saved={args.out_dir} pca_dims={pca_dims}")
 

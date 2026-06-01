@@ -59,6 +59,8 @@ class Trainer:
         return {
             "loss": out.total.item(),
             "recon": out.recon.item(),
+            "recon_base": out.recon_base.item(),
+            "recon_unweighted": out.recon_unweighted.item(),
             "kl": out.kl.item(),
         }
 
@@ -73,7 +75,13 @@ class Trainer:
     def _evaluate_loader(self, loader: DataLoader[torch.Tensor]) -> dict[str, float]:
         model_was_training = self.model.training
         self.model.eval()
-        running: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0}
+        running: dict[str, float] = {
+            "loss": 0.0,
+            "recon": 0.0,
+            "recon_base": 0.0,
+            "recon_unweighted": 0.0,
+            "kl": 0.0,
+        }
         n_batches = 0
         for x in loader:
             x = x.to(self.device)
@@ -81,6 +89,8 @@ class Trainer:
             out = self.loss_fn(x, x_hat, mu, logvar)
             running["loss"] += out.total.item()
             running["recon"] += out.recon.item()
+            running["recon_base"] += out.recon_base.item()
+            running["recon_unweighted"] += out.recon_unweighted.item()
             running["kl"] += out.kl.item()
             n_batches += 1
         if model_was_training:
@@ -102,7 +112,13 @@ class Trainer:
             self.state.epoch = epoch
             self.model.train()
             self.callbacks.call("on_epoch_begin", self, epoch, logs={})
-            running: dict[str, float] = {"loss": 0.0, "recon": 0.0, "kl": 0.0}
+            running: dict[str, float] = {
+                "loss": 0.0,
+                "recon": 0.0,
+                "recon_base": 0.0,
+                "recon_unweighted": 0.0,
+                "kl": 0.0,
+            }
             n_batches = 0
             for batch_idx, x in enumerate(train_loader):
                 self.state.batch = batch_idx
@@ -120,6 +136,7 @@ class Trainer:
             elapsed_train_sec += epoch_duration_sec
             epoch_logs["beta"] = float(self.loss_fn.beta)
             epoch_logs["lr"] = float(self.optimizer.param_groups[0]["lr"])
+            epoch_logs["logical_epoch"] = epoch
             epoch_logs["epoch_duration_sec"] = float(epoch_duration_sec)
             epoch_logs["elapsed_train_sec"] = float(elapsed_train_sec)
             self.state.history.append(epoch_logs)

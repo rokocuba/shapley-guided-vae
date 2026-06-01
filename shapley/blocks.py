@@ -91,6 +91,20 @@ class FeatureBlockIndex:
         group_ids = self.group_ids(device=target_device)
         return per_feature_block_weights.index_select(dim=-1, index=group_ids)
 
+    def equal_block_feature_weights(
+        self,
+        *,
+        device: torch.device | str | None = None,
+    ) -> torch.Tensor:
+        """Return feature weights where every block contributes equal total mass."""
+        block_weights = torch.full(
+            (self.n_blocks,),
+            1.0 / self.n_blocks,
+            dtype=torch.float32,
+            device=device,
+        )
+        return self.expand_block_weights(block_weights, device=device)
+
 
 def mfeat_block_index() -> FeatureBlockIndex:
     return FeatureBlockIndex(

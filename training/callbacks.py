@@ -111,6 +111,8 @@ class BetaWarmupCallback(Callback):
     def on_epoch_begin(
         self, trainer: Any, epoch: int, logs: dict[str, Any] | None = None
     ) -> None:
+        if logs is not None and not bool(logs.get("advance_epoch_controls", True)):
+            return
         trainer.loss_fn.beta = float(self.beta_for_epoch(epoch))
 
 
@@ -217,20 +219,30 @@ class KLBetaSchedulerCallback(Callback):
     def on_epoch_begin(
         self, trainer: Any, epoch: int, logs: dict[str, Any] | None = None
     ) -> None:
+        if logs is not None and not bool(logs.get("advance_epoch_controls", True)):
+            return
         if epoch < self.beta_zero_epochs:
             trainer.loss_fn.beta = 0.0
 
     def on_epoch_end(
         self, trainer: Any, epoch: int, logs: dict[str, Any] | None = None
     ) -> None:
-        observed_kl = self._select_kl(logs)
         target_kl = self.target_for_epoch(epoch)
+        if logs is not None and not bool(logs.get("advance_epoch_controls", True)):
+            logs["kl_target"] = float(target_kl)
+            logs["kl_target_final"] = float(self.target_kl)
+            logs["next_beta"] = float(trainer.loss_fn.beta)
+            logs["kl_controller_advanced"] = False
+            return
+
+        observed_kl = self._select_kl(logs)
         if epoch < self.beta_zero_epochs:
             trainer.loss_fn.beta = 0.0
             if logs is not None:
                 logs["kl_target"] = float(target_kl)
                 logs["kl_target_final"] = float(self.target_kl)
                 logs["next_beta"] = 0.0
+                logs["kl_controller_advanced"] = True
             return
         current_beta = float(trainer.loss_fn.beta)
         beta_delta = self.step_size * (observed_kl - target_kl)
@@ -249,6 +261,7 @@ class KLBetaSchedulerCallback(Callback):
             logs["kl_target"] = float(target_kl)
             logs["kl_target_final"] = float(self.target_kl)
             logs["next_beta"] = float(next_beta)
+            logs["kl_controller_advanced"] = True
 
 
 class ShapleyCallback(Callback):

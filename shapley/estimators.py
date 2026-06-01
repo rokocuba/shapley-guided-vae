@@ -52,15 +52,25 @@ class BlockShapleyEstimator:
         self.group_size = int(group_size)
         self.eps = float(eps)
         self.previous_reference_recon: float | None = None
+        self.value_feature_weights = block_index.equal_block_feature_weights()
 
     def to(self, device: torch.device | str) -> "BlockShapleyEstimator":
         self.sampler.to(device)
+        self.value_feature_weights = self.value_feature_weights.to(device)
         return self
 
     @torch.no_grad()
     def deterministic_reconstruction(self, x: torch.Tensor) -> torch.Tensor:
         mu, _ = self.model.encoder(x)
         return self.model.decoder(mu)
+
+    def row_reconstruction_loss(
+        self,
+        x: torch.Tensor,
+        x_hat: torch.Tensor,
+    ) -> torch.Tensor:
+        weights = self.value_feature_weights.to(device=x.device, dtype=x.dtype)
+        return ((x_hat - x).pow(2) * weights).sum(dim=1)
 
     @torch.no_grad()
     def reference_reconstruction_loss(
@@ -78,7 +88,7 @@ class BlockShapleyEstimator:
         for start in range(0, x.shape[0], batch_size):
             xb = x[start : start + batch_size]
             x_hat = self.deterministic_reconstruction(xb)
-            losses = (x_hat - xb).pow(2).mean(dim=1)
+            losses = self.row_reconstruction_loss(xb, x_hat)
             total += float(losses.sum().item())
             n_rows += int(losses.numel())
         if model_was_training:
@@ -171,8 +181,8 @@ class BlockShapleyEstimator:
 
             x_hat_masked = self.deterministic_reconstruction(x_masked)
             x_hat_full = self.deterministic_reconstruction(x_original)
-            loss_masked = (x_hat_masked - x_original).pow(2).mean(dim=1)
-            loss_full = (x_hat_full - x_original).pow(2).mean(dim=1)
+            loss_masked = self.row_reconstruction_loss(x_original, x_hat_masked)
+            loss_full = self.row_reconstruction_loss(x_original, x_hat_full)
             values = (loss_full - loss_masked) / (loss_full.abs() + self.eps)
             all_node_ids.append(row_node_ids.detach())
             all_values.append(values.detach())

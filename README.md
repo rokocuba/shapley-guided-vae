@@ -29,14 +29,14 @@ For this project, the relevant notion of class is the **six input classes** (des
 | Test samples         |   400 |
 | Total input features |   649 |
 
-| Input class | Description                | Floats |
-| ----------- | -------------------------- | -----: |
-| `fou`       | Fourier coefficients       |     76 |
-| `fac`       | Profile correlations       |    216 |
-| `kar`       | Karhunen-Love coefficients |     64 |
-| `pix`       | Pixel averages             |    240 |
-| `zer`       | Zernike moments            |     47 |
-| `mor`       | Morphological features     |      6 |
+| Input class | Description                | Floats | Block weight | Weight per feature |
+| ----------- | -------------------------- | -----: | -----------: | -----------------: |
+| `fou`       | Fourier coefficients       |     76 |       0.1667 |            0.00220 |
+| `fac`       | Profile correlations       |    216 |       0.1667 |            0.00077 |
+| `kar`       | Karhunen-Love coefficients |     64 |       0.1667 |            0.00260 |
+| `pix`       | Pixel averages             |    240 |       0.1667 |            0.00069 |
+| `zer`       | Zernike moments            |     47 |       0.1667 |            0.00355 |
+| `mor`       | Morphological features     |      6 |       0.1667 |            0.02778 |
 
 Dataset available from the UCI Machine Learning Repository.
 

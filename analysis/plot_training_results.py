@@ -15,13 +15,14 @@ if str(ROOT) not in sys.path:
 from training import load_training_runs
 
 
-def _latest_runs_per_training_type(run_dir: Path) -> set[str]:
+def _latest_runs_per_training_variant(run_dir: Path) -> set[str]:
     runs = load_training_runs(run_dir)
-    latest: dict[str, object] = {}
+    latest: dict[tuple[str, str], object] = {}
     for r in runs:
-        prev = latest.get(r.training_type)
+        key = (r.training_type, r.shapley_tactic or "none")
+        prev = latest.get(key)
         if prev is None or r.started_at > prev.started_at:
-            latest[r.training_type] = r
+            latest[key] = r
     return {r.run_id for r in latest.values()}
 
 
@@ -45,9 +46,15 @@ def build_summary_frame(
                 "epochs": r.epochs,
                 "final_loss": r.final_metrics.get("loss"),
                 "final_recon": r.final_metrics.get("recon"),
+                "final_recon_base": r.final_metrics.get("recon_base"),
+                "final_recon_unweighted": r.final_metrics.get("recon_unweighted"),
                 "final_kl": r.final_metrics.get("kl"),
                 "final_val_loss": r.final_metrics.get("val_loss"),
                 "final_val_recon": r.final_metrics.get("val_recon"),
+                "final_val_recon_base": r.final_metrics.get("val_recon_base"),
+                "final_val_recon_unweighted": r.final_metrics.get(
+                    "val_recon_unweighted"
+                ),
                 "final_val_kl": r.final_metrics.get("val_kl"),
             }
         )
@@ -185,6 +192,7 @@ def plot_single_metric_curves(
     file_name: str,
     split_label: str,
     use_log_scale: bool = False,
+    target_metric_key: str | None = None,
 ) -> None:
     if history.empty:
         return
@@ -219,6 +227,23 @@ def plot_single_metric_curves(
             alpha=0.8,
             label=label,
         )
+        if (
+            target_metric_key is not None
+            and target_metric_key in g.columns
+            and g[target_metric_key].notna().any()
+        ):
+            target_values = g[target_metric_key].astype(float)
+            if use_log_scale:
+                target_values = target_values.where(target_values > 0.0)
+            if target_values.notna().any():
+                plt.plot(
+                    x_values,
+                    target_values,
+                    linewidth=0.9,
+                    linestyle="--",
+                    alpha=0.55,
+                    label=f"{label} target",
+                )
         plotted_any = True
         if len(x_values) > 0:
             max_x = max(max_x, float(x_values.iloc[-1]))
@@ -237,6 +262,10 @@ def plot_single_metric_curves(
     if use_log_scale and plotted_any:
         plt.yscale("log")
 
+    if not plotted_any:
+        plt.close()
+        return
+
     plt.xlabel("elapsed training seconds" if use_elapsed_seconds else "epoch")
     plt.ylabel(f"{y_label} (log scale)" if use_log_scale else y_label)
     plt.title(f"{title} (log scale)" if use_log_scale else title)
@@ -244,6 +273,166 @@ def plot_single_metric_curves(
     plt.tight_layout()
     plt.savefig(out_dir / file_name, dpi=150)
     plt.close()
+
+
+def build_baseline_relative_delta_frame(history: pd.DataFrame) -> pd.DataFrame:
+    if history.empty or "training_type" not in history.columns:
+        return pd.DataFrame()
+
+    df = history.copy()
+    if "logical_epoch" not in df.columns:
+        df["logical_epoch"] = df["epoch"]
+
+    required = ["logical_epoch", "training_type", "shapley_tactic"]
+    metric_keys = ["recon_base", "val_recon_base", "val_kl"]
+    if any(col not in df.columns for col in required):
+        return pd.DataFrame()
+    if any(metric not in df.columns for metric in metric_keys):
+        return pd.DataFrame()
+
+    baseline = df[df["training_type"].eq("baseline")].copy()
+    shapley = df[df["training_type"].eq("shapley")].copy()
+    if baseline.empty or shapley.empty:
+        return pd.DataFrame()
+
+    baseline = (
+        baseline.sort_values(["logical_epoch", "epoch"])
+        .groupby("logical_epoch", as_index=False)
+        .tail(1)
+    )
+    baseline_metrics = baseline[
+        ["logical_epoch", *metric_keys]
+    ].rename(
+        columns={
+            "recon_base": "baseline_recon_base",
+            "val_recon_base": "baseline_val_recon_base",
+            "val_kl": "baseline_val_kl",
+        }
+    )
+    merged = shapley.merge(baseline_metrics, on="logical_epoch", how="inner")
+    rows: list[dict[str, object]] = []
+    metric_labels = {
+        "recon_base": "train_recon_base",
+        "val_recon_base": "test_recon_base",
+        "val_kl": "test_kl",
+    }
+    for metric_key, label in metric_labels.items():
+        baseline_key = f"baseline_{metric_key}"
+        metric_df = merged[
+            [
+                "run_id",
+                "shapley_tactic",
+                "phase",
+                "epoch",
+                "logical_epoch",
+                "elapsed_train_sec",
+                metric_key,
+                baseline_key,
+            ]
+        ].copy()
+        metric_df = metric_df.rename(
+            columns={
+                metric_key: "shapley_value",
+                baseline_key: "baseline_value",
+            }
+        )
+        metric_df["metric"] = label
+        metric_df["delta"] = metric_df["shapley_value"] - metric_df["baseline_value"]
+        rows.extend(metric_df.to_dict("records"))
+    return pd.DataFrame(rows)
+
+
+def plot_baseline_relative_delta(delta: pd.DataFrame, out_dir: Path) -> None:
+    if delta.empty:
+        return
+
+    metric_order = [
+        ("train_recon_base", "Train base reconstruction delta"),
+        ("test_recon_base", "Test base reconstruction delta"),
+        ("test_kl", "Test KL delta"),
+    ]
+    present_metrics = [item for item in metric_order if item[0] in set(delta["metric"])]
+    if not present_metrics:
+        return
+
+    fig, axes = plt.subplots(
+        len(present_metrics),
+        1,
+        figsize=(14, 3.8 * len(present_metrics)),
+        sharex=True,
+    )
+    if len(present_metrics) == 1:
+        axes = [axes]
+
+    colors = {
+        "baseline": "#1f77b4",
+        "marginal": "#ff7f0e",
+        "conditional": "#2ca02c",
+    }
+    handles_by_label: dict[str, object] = {}
+
+    for ax, (metric_key, title) in zip(axes, present_metrics):
+        metric_df = delta[delta["metric"].eq(metric_key)].copy()
+        smoothed_groups: list[pd.DataFrame] = []
+        for (tactic, run_id), group in metric_df.groupby(["shapley_tactic", "run_id"]):
+            group = (
+                group.sort_values(["logical_epoch", "epoch"])
+                .groupby("logical_epoch", as_index=False)
+                .agg(delta=("delta", "mean"))
+            )
+            n_points = len(group)
+            window = max(7, min(151, int(round(n_points * 0.08))))
+            if window % 2 == 0:
+                window += 1
+            group["delta_smooth"] = (
+                group["delta"]
+                .rolling(window=window, center=True, min_periods=1)
+                .mean()
+                .rolling(window=max(3, window // 3), center=True, min_periods=1)
+                .mean()
+            )
+            group["shapley_tactic"] = tactic
+            group["run_id"] = run_id
+            smoothed_groups.append(group)
+
+        if not smoothed_groups:
+            continue
+        metric_df = pd.concat(smoothed_groups, ignore_index=True)
+        max_abs_delta = float(metric_df["delta_smooth"].abs().max())
+        linthresh = max(1e-5, max_abs_delta * 0.01)
+        for (tactic, run_id), group in metric_df.groupby(["shapley_tactic", "run_id"]):
+            group = group.sort_values("logical_epoch")
+            label = f"{tactic}|{run_id[-6:]}"
+            (line,) = ax.plot(
+                group["logical_epoch"],
+                group["delta_smooth"],
+                linewidth=1.7,
+                alpha=0.9,
+                color=colors.get(str(tactic), None),
+                label=label,
+            )
+            handles_by_label.setdefault(label, line)
+        ax.axhline(0.0, color="black", linewidth=1.0, linestyle="--", alpha=0.7)
+        ax.set_yscale("symlog", linthresh=linthresh)
+        ax.set_ylabel("Shapley - baseline\n(signed log)")
+        ax.set_title(title)
+        ax.grid(True, axis="y", which="both", alpha=0.22)
+        ax.grid(True, axis="x", which="major", alpha=0.12)
+
+    axes[-1].set_xlabel("logical epoch")
+    fig.legend(
+        handles_by_label.values(),
+        handles_by_label.keys(),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.985),
+        ncol=3,
+        fontsize=8,
+        frameon=False,
+    )
+    fig.suptitle("Baseline-Relative Shapley Deltas", y=1.02)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+    fig.savefig(out_dir / "baseline_relative_delta_curves.png", dpi=150)
+    plt.close(fig)
 
 
 def plot_shapley_weights(weights: pd.DataFrame, out_dir: Path) -> None:
@@ -358,6 +547,11 @@ def main() -> None:
         args.out / "recon_curves.png",
         args.out / "recon_train_curves.png",
         args.out / "recon_test_curves.png",
+        args.out / "recon_base_train_curves.png",
+        args.out / "recon_base_test_curves.png",
+        args.out / "recon_unweighted_train_curves.png",
+        args.out / "recon_unweighted_test_curves.png",
+        args.out / "baseline_relative_delta_curves.png",
         args.out / "kl_curves.png",
         args.out / "shapley_node_variance.png",
         args.out / "shapley_phase_timing.png",
@@ -368,7 +562,7 @@ def main() -> None:
 
     summary_all = build_summary_frame(args.runs, selected_run_ids=None)
     selected_run_ids = (
-        None if args.all_runs else _latest_runs_per_training_type(args.runs)
+        None if args.all_runs else _latest_runs_per_training_variant(args.runs)
     )
     summary = build_summary_frame(args.runs, selected_run_ids=selected_run_ids)
     history = build_history_frame(args.runs, selected_run_ids=selected_run_ids)
@@ -388,6 +582,8 @@ def main() -> None:
     shapley_weights.to_csv(args.out / "shapley_weights.csv", index=False)
     shapley_node_stats.to_csv(args.out / "shapley_node_stats.csv", index=False)
     shapley_phase_timing.to_csv(args.out / "shapley_phase_timing.csv", index=False)
+    baseline_delta = build_baseline_relative_delta_frame(history)
+    baseline_delta.to_csv(args.out / "baseline_relative_delta.csv", index=False)
 
     baseline_all = (
         summary_all[summary_all["training_type"] == "baseline"].copy()
@@ -401,20 +597,20 @@ def main() -> None:
     plot_single_metric_curves(
         history,
         args.out,
-        metric_key="recon",
-        title="Train Reconstruction Curves",
-        y_label="reconstruction loss",
-        file_name="recon_train_curves.png",
+        metric_key="recon_base",
+        title="Train Base Reconstruction Curves",
+        y_label="base block-normalized reconstruction loss",
+        file_name="recon_base_train_curves.png",
         split_label="train",
         use_log_scale=True,
     )
     plot_single_metric_curves(
         history,
         args.out,
-        metric_key="val_recon",
-        title="Test Reconstruction Curves",
-        y_label="reconstruction loss",
-        file_name="recon_test_curves.png",
+        metric_key="val_recon_base",
+        title="Test Base Reconstruction Curves",
+        y_label="base block-normalized reconstruction loss",
+        file_name="recon_base_test_curves.png",
         split_label="test",
         use_log_scale=True,
     )
@@ -427,7 +623,9 @@ def main() -> None:
         file_name="kl_curves.png",
         split_label="train",
         use_log_scale=True,
+        target_metric_key="kl_target",
     )
+    plot_baseline_relative_delta(baseline_delta, args.out)
     plot_shapley_weights(shapley_weights, args.out)
     plot_shapley_node_variance(shapley_node_stats, args.out)
     plot_shapley_phase_timing(shapley_phase_timing, args.out)
