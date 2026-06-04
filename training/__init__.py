@@ -7,7 +7,13 @@ from .results import (
     save_training_run,
     update_training_run_artifacts,
 )
-from .shapley import ShapleyTrainingConfig, ShapleyTrainingResult, run_shapley_training
+from .shapley import (
+    ShapleyTrainingConfig,
+    ShapleyTrainingResult,
+    StaticJointTrainingConfig,
+    run_shapley_training,
+    run_static_joint_training,
+)
 from .trainer import Trainer
 
 __all__ = [
@@ -23,5 +29,7 @@ __all__ = [
     "update_training_run_artifacts",
     "ShapleyTrainingConfig",
     "ShapleyTrainingResult",
+    "StaticJointTrainingConfig",
     "run_shapley_training",
+    "run_static_joint_training",
 ]

@@ -9,8 +9,8 @@ if (-not (Test-Path $activatePath)) {
 }
 
 # Define settings as arrays for reuse with splatting
-$settings = @('--lr', '1e-3', '--lr-min', '1e-6', '--epochs', '200', '--latent-dim', '15')
-$shapleySettings = @('--shapley-phase-c-epochs', '1', '--shapley-warmup-epochs', '10')
+$settings = @('--lr', '1e-4', '--lr-min', '1e-6', '--epochs', '200', '--latent-dim', '5', '--hidden-dims', '64,16')
+$shapleySettings = @('--shapley-warmup-epochs', '30')
 
 Write-Host "Activating venv..."
 & $activatePath

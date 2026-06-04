@@ -38,6 +38,12 @@ class ShapleyTrainingResult:
     phase_timing_rows: list[dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class StaticJointTrainingConfig:
+    total_epochs: int
+    block_weights: torch.Tensor
+
+
 @contextmanager
 def freeze_module(module: nn.Module) -> Iterator[None]:
     params = list(module.parameters())
@@ -76,6 +82,10 @@ def _train_one_epoch(
     elapsed_train_sec: float,
     val_loader: DataLoader[torch.Tensor] | None = None,
     advance_epoch_controls: bool = True,
+    encoder_frozen: bool = False,
+    decoder_frozen: bool = False,
+    joint_block_weights: torch.Tensor | None = None,
+    block_index: FeatureBlockIndex | None = None,
 ) -> tuple[dict[str, Any], float]:
     epoch_started = perf_counter()
     trainer.state.epoch = epoch
@@ -83,6 +93,9 @@ def _train_one_epoch(
     control_logs = {
         "phase": phase,
         "advance_epoch_controls": advance_epoch_controls,
+        "encoder_frozen": encoder_frozen,
+        "decoder_frozen": decoder_frozen,
+        "joint_shapley_step": joint_block_weights is not None,
     }
     trainer.callbacks.call("on_epoch_begin", trainer, epoch, logs=control_logs)
     running: dict[str, float] = {
@@ -96,13 +109,24 @@ def _train_one_epoch(
     for batch_idx, x in enumerate(loader):
         trainer.state.batch = batch_idx
         trainer.callbacks.call(
-            "on_batch_begin", trainer, epoch, batch_idx, logs={"phase": phase}
+            "on_batch_begin", trainer, epoch, batch_idx, logs=control_logs
         )
-        logs = trainer._run_batch(x)
+        if joint_block_weights is None:
+            logs = trainer._run_batch(x)
+        else:
+            if block_index is None:
+                raise ValueError("block_index is required for joint Shapley training.")
+            logs = _run_joint_shapley_batch(
+                trainer,
+                x,
+                block_weights=joint_block_weights,
+                block_index=block_index,
+            )
         trainer.callbacks.call(
-            "on_batch_end", trainer, epoch, batch_idx, logs={**logs, "phase": phase}
+            "on_batch_end", trainer, epoch, batch_idx, logs={**logs, **control_logs}
         )
         for key, value in logs.items():
+            running.setdefault(key, 0.0)
             running[key] += value
         trainer.state.step += 1
         n_batches += 1
@@ -119,6 +143,9 @@ def _train_one_epoch(
             "phase": phase,
             "logical_epoch": epoch,
             "advance_epoch_controls": advance_epoch_controls,
+            "encoder_frozen": encoder_frozen,
+            "decoder_frozen": decoder_frozen,
+            "joint_shapley_step": joint_block_weights is not None,
             "beta": float(trainer.loss_fn.beta),
             "lr": float(trainer.optimizer.param_groups[0]["lr"]),
             "epoch_duration_sec": float(epoch_duration_sec),
@@ -139,6 +166,44 @@ def _train_one_epoch(
         else:
             trainer.scheduler.step()
     return epoch_logs, elapsed_train_sec
+
+
+def _run_joint_shapley_batch(
+    trainer: Trainer,
+    x: torch.Tensor,
+    *,
+    block_weights: torch.Tensor,
+    block_index: FeatureBlockIndex,
+) -> dict[str, float]:
+    x = x.to(trainer.device)
+    trainer.optimizer.zero_grad(set_to_none=True)
+
+    trainer.loss_fn.set_block_weights(block_weights, block_index)
+    with freeze_module(trainer.model.decoder):
+        x_hat, mu, logvar = trainer.model(x)
+        encoder_out = trainer.loss_fn(x, x_hat, mu, logvar)
+        encoder_loss = encoder_out.recon + trainer.loss_fn.beta * encoder_out.kl
+        encoder_loss.backward()
+
+    trainer.loss_fn.set_base_feature_weights()
+    with freeze_module(trainer.model.encoder):
+        x_hat, mu, logvar = trainer.model(x)
+        decoder_out = trainer.loss_fn(x, x_hat, mu, logvar)
+        decoder_loss = decoder_out.recon_base
+        decoder_loss.backward()
+
+    trainer.optimizer.step()
+    trainer.loss_fn.set_base_feature_weights()
+
+    return {
+        "loss": float((encoder_loss.detach() + decoder_loss.detach()).item()),
+        "recon": float(encoder_out.recon.detach().item()),
+        "recon_base": float(decoder_out.recon_base.detach().item()),
+        "recon_unweighted": float(decoder_out.recon_unweighted.detach().item()),
+        "kl": float(encoder_out.kl.detach().item()),
+        "encoder_loss": float(encoder_loss.detach().item()),
+        "decoder_loss": float(decoder_loss.detach().item()),
+    }
 
 
 def run_shapley_training(
@@ -166,6 +231,10 @@ def run_shapley_training(
     trainer.callbacks.call("on_train_begin", trainer, logs={"training_type": "shapley"})
     for epoch in range(config.total_epochs):
         trainer.loss_fn.set_base_feature_weights()
+        use_joint_step = (
+            applied_block_weights is not None
+            and sampling_phase >= config.min_sampling_phases_before_c
+        )
         logs, elapsed_train_sec = _train_one_epoch(
             trainer,
             train_loader,
@@ -173,6 +242,10 @@ def run_shapley_training(
             phase="A",
             elapsed_train_sec=elapsed_train_sec,
             val_loader=val_loader,
+            encoder_frozen=False,
+            decoder_frozen=False,
+            joint_block_weights=applied_block_weights if use_joint_step else None,
+            block_index=block_index if use_joint_step else None,
         )
         logs["cycle"] = cycle
         logs["sampling_phase"] = sampling_phase
@@ -229,42 +302,57 @@ def run_shapley_training(
                 }
             )
 
-        if sampling_phase < config.min_sampling_phases_before_c:
-            cycle += 1
-            continue
-
-        trainer.loss_fn.set_block_weights(applied_block_weights, block_index)
-        phase_started = perf_counter()
-        with freeze_module(trainer.model.decoder):
-            for c_epoch in range(config.phase_c_epochs):
-                c_logs, elapsed_train_sec = _train_one_epoch(
-                    trainer,
-                    train_loader,
-                    epoch=epoch,
-                    phase="C",
-                    elapsed_train_sec=elapsed_train_sec,
-                    val_loader=val_loader,
-                    advance_epoch_controls=False,
-                )
-                c_logs["cycle"] = cycle
-                c_logs["sampling_phase"] = sampling_phase
-                c_logs["phase_c_epoch"] = c_epoch
         trainer.loss_fn.set_base_feature_weights()
-        result.phase_timing_rows.append(
-            {
-                "epoch_start": epoch,
-                "epoch_end": epoch,
-                "phase": "C",
-                "cycle": cycle,
-                "duration_sec": perf_counter() - phase_started,
-                "num_batches": len(train_loader) * config.phase_c_epochs,
-                "num_samples": len(train_loader.dataset) * config.phase_c_epochs,
-                "num_node_groups": None,
-                "tactic": None,
-            }
-        )
         cycle += 1
     trainer.callbacks.call("on_train_end", trainer, logs={"history": trainer.state.history})
     trainer.state.train_duration_sec = perf_counter() - train_started
     trainer.state.train_ended_at = datetime.now(timezone.utc).isoformat()
     return result
+
+
+def run_static_joint_training(
+    *,
+    trainer: Trainer,
+    train_loader: DataLoader[torch.Tensor],
+    block_index: FeatureBlockIndex,
+    config: StaticJointTrainingConfig,
+    val_loader: DataLoader[torch.Tensor] | None = None,
+) -> list[dict[str, Any]]:
+    train_started = perf_counter()
+    trainer.state.train_started_at = datetime.now(timezone.utc).isoformat()
+    elapsed_train_sec = (
+        float(trainer.state.history[-1].get("elapsed_train_sec", 0.0))
+        if trainer.state.history
+        else 0.0
+    )
+    block_weights = config.block_weights.detach().to(
+        device=trainer.device,
+        dtype=trainer.loss_fn.feature_weights.dtype,
+    )
+    trainer.callbacks.call(
+        "on_train_begin",
+        trainer,
+        logs={"training_type": "static-joint"},
+    )
+    for epoch in range(config.total_epochs):
+        trainer.loss_fn.set_base_feature_weights()
+        logs, elapsed_train_sec = _train_one_epoch(
+            trainer,
+            train_loader,
+            epoch=epoch,
+            phase="A",
+            elapsed_train_sec=elapsed_train_sec,
+            val_loader=val_loader,
+            encoder_frozen=False,
+            decoder_frozen=False,
+            joint_block_weights=block_weights,
+            block_index=block_index,
+        )
+        logs["cycle"] = 0
+        logs["sampling_phase"] = 0
+        logs["static_joint_weights"] = True
+    trainer.loss_fn.set_base_feature_weights()
+    trainer.callbacks.call("on_train_end", trainer, logs={"history": trainer.state.history})
+    trainer.state.train_duration_sec = perf_counter() - train_started
+    trainer.state.train_ended_at = datetime.now(timezone.utc).isoformat()
+    return trainer.state.history
