@@ -21,7 +21,6 @@ from utils import fit_feature_scaler, load_dataset_bundle, transform_features
 
 def load_scaled_data_and_metadata(
     data_dir: Path,
-    dataset_name: str,
     test_size: float,
     split_seed: int,
     normalize_features: bool,
@@ -34,7 +33,7 @@ def load_scaled_data_and_metadata(
     str | None,
     np.ndarray,
 ]:
-    bundle = load_dataset_bundle(data_dir=data_dir, dataset_name=dataset_name)
+    bundle = load_dataset_bundle(data_dir=data_dir)
     train_idx, test_idx = make_split_indices(len(bundle.x_raw), test_size, split_seed)
     scaler = fit_feature_scaler(bundle.x_raw[train_idx]) if normalize_features else None
     x_scaled = transform_features(bundle.x_raw, scaler)
@@ -77,11 +76,8 @@ def evaluate_mean_predictors(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     x_train = x_scaled[train_idx]
     x_test = x_scaled[test_idx]
-    base_weights = (
-        FeatureBlockIndex.from_feature_groups(feature_groups)
-        .equal_block_feature_weights()
-        .numpy()
-    )
+    block_index = FeatureBlockIndex.from_feature_groups(feature_groups)
+    pix_block = block_index.blocks[block_index.names.index("pix")]
 
     predictors = {
         "global_mean": np.repeat(x_train.mean(axis=0)[None, :], len(test_idx), axis=0)
@@ -103,7 +99,7 @@ def evaluate_mean_predictors(
     for predictor_name, preds in predictors.items():
         sq_error = (preds - x_test) ** 2
         feature_mse = sq_error.mean(axis=0)
-        recon = float((feature_mse * base_weights).sum())
+        recon = float(feature_mse[pix_block.start : pix_block.stop].mean())
         mae = float(np.abs(preds - x_test).mean())
         rmse = float(np.sqrt(sq_error.mean()))
         summary_rows.append(
@@ -111,7 +107,9 @@ def evaluate_mean_predictors(
                 "entry_type": "baseline",
                 "label": predictor_name,
                 "final_val_recon": recon,
+                "final_val_pix_recon": recon,
                 "best_val_recon": recon,
+                "best_val_pix_recon": recon,
                 "val_mae": mae,
                 "val_rmse": rmse,
                 "n_test": int(len(test_idx)),
@@ -142,11 +140,8 @@ def evaluate_pca_predictors(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     x_train = x_scaled[train_idx]
     x_test = x_scaled[test_idx]
-    base_weights = (
-        FeatureBlockIndex.from_feature_groups(feature_groups)
-        .equal_block_feature_weights()
-        .numpy()
-    )
+    block_index = FeatureBlockIndex.from_feature_groups(feature_groups)
+    pix_block = block_index.blocks[block_index.names.index("pix")]
 
     summary_rows: list[dict[str, float | int | str]] = []
     feature_rows: list[dict[str, float | str]] = []
@@ -156,7 +151,7 @@ def evaluate_pca_predictors(
         preds = pca.inverse_transform(pca.transform(x_test))
         sq_error = (preds - x_test) ** 2
         feature_mse = sq_error.mean(axis=0)
-        recon = float((feature_mse * base_weights).sum())
+        recon = float(feature_mse[pix_block.start : pix_block.stop].mean())
         mae = float(np.abs(preds - x_test).mean())
         rmse = float(np.sqrt(sq_error.mean()))
         summary_rows.append(
@@ -164,7 +159,9 @@ def evaluate_pca_predictors(
                 "entry_type": "baseline",
                 "label": f"pca_{latent_dim}",
                 "final_val_recon": recon,
+                "final_val_pix_recon": recon,
                 "best_val_recon": recon,
+                "best_val_pix_recon": recon,
                 "val_mae": mae,
                 "val_rmse": rmse,
                 "n_test": int(len(test_idx)),
@@ -223,12 +220,10 @@ def _extract_pca_dim(label: str) -> int | None:
 def build_model_frame(out_dir: Path) -> pd.DataFrame:
     summary = pd.read_csv(out_dir / "run_summary.csv")
     history = pd.read_csv(out_dir / "run_history.csv")
-    val_metric = (
-        "val_recon_base" if "val_recon_base" in history.columns else "val_recon"
-    )
+    val_metric = "val_pix_recon" if "val_pix_recon" in history.columns else "val_recon"
     final_metric = (
-        "final_val_recon_base"
-        if "final_val_recon_base" in summary.columns
+        "final_val_pix_recon"
+        if "final_val_pix_recon" in summary.columns
         else "final_val_recon"
     )
     best = (
@@ -248,6 +243,7 @@ def build_model_frame(out_dir: Path) -> pd.DataFrame:
     merged["label"] = merged.apply(_make_label, axis=1)
     merged["entry_type"] = "vae"
     merged["final_val_recon"] = merged[final_metric]
+    merged["final_val_pix_recon"] = merged[final_metric]
     return merged[
         [
             "entry_type",
@@ -271,7 +267,7 @@ def plot_reconstruction_comparison(
         plot_df["final_val_recon"],
         y,
         s=70,
-        label="final val_recon_base",
+        label="final val_pix_recon",
         color="#ff7f0e",
         marker="s",
     )
@@ -281,7 +277,7 @@ def plot_reconstruction_comparison(
 
     ax.set_yticks(y)
     ax.set_yticklabels(plot_df["label"])
-    ax.set_xlabel("final validation reconstruction loss (block-normalized MSE)")
+    ax.set_xlabel("final validation pixel reconstruction loss")
     ax.set_title(f"{dataset_name} runs vs simple baselines")
     ax.grid(axis="x", alpha=0.25)
     ax.legend()
@@ -340,7 +336,7 @@ def plot_feature_baselines(
 
     baseline_cols = [
         col
-        for col in ["global_mean", "wine_type_mean", "digit_class_mean"]
+        for col in ["global_mean", "digit_class_mean"]
         if col in pivot.columns
     ]
     pca_cols = sorted(
@@ -364,7 +360,6 @@ def plot_feature_baselines(
     )
     color_map = {
         "global_mean": "#c6dbef",
-        "wine_type_mean": "#6baed6",
         "digit_class_mean": "#74c476",
     }
     if pca_cols:
@@ -393,7 +388,6 @@ def plot_feature_baselines(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
-    parser.add_argument("--dataset-name", type=str, default="mfeat")
     parser.add_argument(
         "--out-dir",
         type=Path,
@@ -423,7 +417,6 @@ def main() -> None:
         labels,
     ) = load_scaled_data_and_metadata(
         data_dir=args.data_dir,
-        dataset_name=args.dataset_name,
         test_size=args.test_size,
         split_seed=args.split_seed,
         normalize_features=not args.no_normalize_features,
@@ -511,13 +504,13 @@ def main() -> None:
     comparison.to_csv(args.out_dir / "mean_baseline_comparison.csv", index=False)
     feature_df.to_csv(args.out_dir / "mean_baseline_feature_mse.csv", index=False)
     plot_reconstruction_comparison(
-        comparison, args.out_dir / "mean_baseline_vs_vae.png", args.dataset_name
+        comparison, args.out_dir / "mean_baseline_vs_vae.png", "mfeat"
     )
     plot_feature_baselines(
-        feature_df, args.out_dir / "mean_baseline_feature_mse.png", args.dataset_name
+        feature_df, args.out_dir / "mean_baseline_feature_mse.png", "mfeat"
     )
     plot_vae_kl_comparison(
-        comparison, args.out_dir / "vae_kl_comparison.png", args.dataset_name
+        comparison, args.out_dir / "vae_kl_comparison.png", "mfeat"
     )
     print(f"saved={args.out_dir} pca_dims={pca_dims}")
 

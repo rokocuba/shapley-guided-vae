@@ -1,84 +1,81 @@
-# Shapley-Guided VAE: Dynamic Scaling of Reconstruction Error
+# Shapley-Guided Pixel-Auxiliary VAE
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-latest-orange.svg)](https://pytorch.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+BSc thesis code for dynamic auxiliary reconstruction scaling in a Variational Autoencoder using online Shapley values.
 
-> **BSc in Computing, Thesis Project**  
-> **Author:** Roko Čubrić\
-> **Institution:** Faculty of Electrical Engineering and Computing (FER), University of Zagreb\
-> **Mentor:** Tomislav Burić
+## Method
 
----
+Dataset: UCI Multiple Features (`mfeat`), 2000 digit samples, 649 features.
 
-## Abstract
+| Block | Meaning | Features | Role |
+| --- | --- | ---: | --- |
+| `fou` | Fourier coefficients | 76 | encoder input, auxiliary target |
+| `fac` | Profile correlations | 216 | encoder input, auxiliary target |
+| `kar` | Karhunen-Loeve coefficients | 64 | encoder input, auxiliary target |
+| `pix` | Pixel averages | 240 | encoder input, primary target |
+| `zer` | Zernike moments | 47 | encoder input, auxiliary target |
+| `mor` | Morphological features | 6 | encoder input, auxiliary target |
 
-This project investigates the optimization of Variational Autoencoder (VAE) training by replacing standard, fixed-hyperparameter loss scaling with a dynamic reweighting of per-feature reconstruction errors. By framing feature contributions as a cooperative game, the methodology leverages computationally efficient mathematical approximations of exponentially complex Shapley values to continuously adjust these weight factors during model training. Finally, the proposed approach is experimentally evaluated against static baselines to rigorously analyze the trade-off between the computational overhead of online Shapley estimation and resulting improvements in convergence speed and final reconstruction quality.
+The encoder consumes all 649 normalized features. The decoder has one shared trunk and six output heads, concatenated back to a flat 649-vector for compatibility.
 
-## Dataset
+Training objective:
 
-We use the **UCI Multiple Features (mfeat) Dataset**.
-
-For this project, the relevant notion of class is the **six input classes** (descriptor groups) that are concatenated into one flat VAE input vector. Each sample contains all six input classes.
-
-| Dataset property     | Value |
-| -------------------- | ----: |
-| Total samples        |  2000 |
-| Input classes        |     6 |
-| Train samples        |  1600 |
-| Test samples         |   400 |
-| Total input features |   649 |
-
-| Input class | Description                | Floats | Block weight | Weight per feature |
-| ----------- | -------------------------- | -----: | -----------: | -----------------: |
-| `fou`       | Fourier coefficients       |     76 |       0.1667 |            0.00220 |
-| `fac`       | Profile correlations       |    216 |       0.1667 |            0.00077 |
-| `kar`       | Karhunen-Love coefficients |     64 |       0.1667 |            0.00260 |
-| `pix`       | Pixel averages             |    240 |       0.1667 |            0.00069 |
-| `zer`       | Zernike moments            |     47 |       0.1667 |            0.00355 |
-| `mor`       | Morphological features     |      6 |       0.1667 |            0.02778 |
-
-Dataset available from the UCI Machine Learning Repository.
-
-## Mathematical Framing
-
-The core innovation treats VAE training as a cooperative game per epoch:
-
-- **Players:** The input features.
-- **Payoff:** The reconstruction performance of the VAE given a specific subset (coalition) of features.
-
-## Requirements
-
-- Python 3.11+
-- (Recommended) `uv` package manager
-- Alternatively: standard `pip`
-
----
-
-## Installation
-
-### Option A — Recommended (uv)
-
-```bash
-uv venv
-# activate the environment
-# CPU-only (default for most users)
-uv sync --extra cpu
-
-# CUDA 12.1
-uv sync --extra cu121
+```text
+L = pix_recon
+    + aux_loss_weight * sum(w_g * aux_recon_g for g in {fou,fac,kar,zer,mor})
+    + beta * KL
 ```
 
----
+Default `aux_loss_weight` is `0.2`. Static baseline uses `w_g = 1/5`. Shapley runs estimate five auxiliary-block Shapley values from a pixel-only payoff and distribute one auxiliary weight budget over the five auxiliary losses. Pixel is the target, not a Shapley player, and its loss stays fixed at coefficient `1`.
 
-### Option B — Standard pip
+## Defaults
 
-```bash
-python -m venv .venv
-# activate the environment
-pip install -r requirements.txt
+| Parameter | Value |
+| --- | ---: |
+| Epochs | `2000` |
+| Batch size | `256` |
+| Hidden dims | `1024,1024` |
+| Latent dim | `5` |
+| KL target | `3.0` |
+| Warm-up before Shapley sampling | `100` epochs |
+| Dynamic activation delay | `5` sampling phases |
+
+## Run
+
+```powershell
+.\.venv\Scripts\python.exe main.py
 ```
 
-## References
+Core experiment matrix:
 
-- Hugh Chen, Ian C. Covert, Scott M. Lundberg, and Su-In Lee. _Algorithms to estimate Shapley value feature attributions._ arXiv:2207.07605, 2022. https://doi.org/10.48550/arXiv.2207.07605
+```powershell
+.\run-training-variants.ps1
+```
+
+Manual runs:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --training-type baseline
+.\.venv\Scripts\python.exe main.py --training-type shapley --shapley-tactic baseline
+.\.venv\Scripts\python.exe main.py --training-type shapley --shapley-tactic marginal
+.\.venv\Scripts\python.exe main.py --training-type shapley --shapley-tactic conditional
+```
+
+## Artifacts
+
+Each run writes `metadata.json`, `history.csv`, `callback_timing.csv`, `model.pt`, and feature-difference diagnostics.
+
+Shapley runs also write:
+
+- `shapley_weights.csv`
+- `shapley_node_stats.csv`
+- `shapley_phase_timing.csv`
+
+Primary comparison metric: `val_pix_recon` over elapsed wall-clock seconds.
+
+Plot runs:
+
+```powershell
+.\.venv\Scripts\python.exe analysis\plot_training_results.py --runs analysis/output/training_runs --out analysis/output/training_runs --all-runs
+```
+
+The plot script also writes `pixel_threshold_times.csv` with epoch and elapsed seconds to reach `1.05 * min(val_pix_recon)` from the static baseline.

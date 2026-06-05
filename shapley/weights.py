@@ -10,11 +10,11 @@ from .blocks import FeatureBlockIndex
 @dataclass(slots=True)
 class ShapleyWeightResult:
     raw_scores: torch.Tensor
-    block_weights: torch.Tensor
-    feature_weights: torch.Tensor
+    weights: torch.Tensor
+    policy: str
 
 
-def positive_shapley_weights(
+def auxiliary_shapley_weights(
     shapley_values: torch.Tensor,
     block_index: FeatureBlockIndex,
     *,
@@ -31,32 +31,52 @@ def positive_shapley_weights(
         raise ValueError("shapley_values must be finite.")
 
     policy = on_all_nonpositive.strip().lower()
-    positive = torch.clamp_min(shapley_values, 0.0)
-    total = positive.sum()
-    if float(total.item()) <= eps:
+    if policy not in {"error", "flip_negative", "uniform"}:
+        raise ValueError(
+            "on_all_nonpositive must be one of: error, flip_negative, uniform."
+        )
+
+    raw = shapley_values.detach().to(dtype=torch.float32).clone()
+
+    all_nonpositive = bool((raw <= 0.0).all().item())
+    if all_nonpositive:
         if policy == "error":
             raise ValueError(
                 "All Shapley scores are non-positive; refusing to silently map them "
-                "to training weights."
+                "to auxiliary weights."
             )
-        if policy == "flip_negative":
-            positive = torch.clamp_min(-shapley_values, 0.0)
-            total = positive.sum()
-        elif policy == "uniform":
-            positive = torch.ones_like(shapley_values)
-            total = positive.sum()
-        else:
-            raise ValueError(
-                "on_all_nonpositive must be one of: error, flip_negative, uniform."
+        if policy == "uniform":
+            weights = torch.full_like(raw, 1.0 / raw.numel())
+            return ShapleyWeightResult(
+                raw_scores=raw,
+                weights=weights,
+                policy="uniform_all_nonpositive",
             )
-    if float(total.item()) <= eps:
-        positive = torch.ones_like(shapley_values)
-        total = positive.sum()
 
-    block_weights = positive / total
-    feature_weights = block_index.expand_block_weights(block_weights)
+    if policy == "flip_negative" and float(torch.clamp_min(raw, 0.0).sum()) <= eps:
+        signal = torch.clamp_min(-raw, 0.0)
+        mapping_policy = "flip_negative"
+    else:
+        signal = torch.clamp_min(raw, 0.0)
+        mapping_policy = "positive_share"
+
+    total = signal.sum()
+    if float(total.item()) <= eps:
+        if policy == "uniform":
+            weights = torch.full_like(raw, 1.0 / raw.numel())
+            return ShapleyWeightResult(
+                raw_scores=raw,
+                weights=weights,
+                policy="uniform_no_positive_phi",
+            )
+        raise ValueError(
+            "No positive Shapley scores are available for auxiliary weight sharing."
+        )
+
+    weights = signal / total.clamp_min(eps)
+
     return ShapleyWeightResult(
-        raw_scores=shapley_values.detach().clone(),
-        block_weights=block_weights,
-        feature_weights=feature_weights,
+        raw_scores=raw,
+        weights=weights,
+        policy=mapping_policy,
     )

@@ -53,10 +53,19 @@ class FeatureBlockIndex:
     def n_blocks(self) -> int:
         return len(self.blocks)
 
+    def excluding(self, *names: str) -> "FeatureBlockIndex":
+        excluded = set(names)
+        return FeatureBlockIndex(
+            blocks=tuple(block for block in self.blocks if block.name not in excluded),
+            input_dim=self.input_dim,
+        )
+
     def group_ids(self, *, device: torch.device | str | None = None) -> torch.Tensor:
-        ids = torch.empty(self.input_dim, dtype=torch.long, device=device)
+        ids = torch.full((self.input_dim,), -1, dtype=torch.long, device=device)
         for block_idx, block in enumerate(self.blocks):
             ids[block.start : block.stop] = block_idx
+        if bool((ids < 0).any().item()):
+            raise ValueError("FeatureBlockIndex does not cover every input feature.")
         return ids
 
     def expand_block_mask(
@@ -71,40 +80,16 @@ class FeatureBlockIndex:
             )
         target_device = device if device is not None else block_mask.device
         block_mask = block_mask.to(device=target_device, dtype=torch.bool)
-        group_ids = self.group_ids(device=target_device)
-        return block_mask.index_select(dim=-1, index=group_ids)
-
-    def expand_block_weights(
-        self,
-        block_weights: torch.Tensor,
-        *,
-        device: torch.device | str | None = None,
-    ) -> torch.Tensor:
-        if block_weights.shape[-1] != self.n_blocks:
-            raise ValueError(
-                f"Expected last dimension {self.n_blocks}, got {block_weights.shape[-1]}."
-            )
-        target_device = device if device is not None else block_weights.device
-        block_weights = block_weights.to(device=target_device, dtype=torch.float32)
-        block_sizes = torch.tensor(self.sizes, dtype=block_weights.dtype, device=target_device)
-        per_feature_block_weights = block_weights / block_sizes.clamp_min(1.0)
-        group_ids = self.group_ids(device=target_device)
-        return per_feature_block_weights.index_select(dim=-1, index=group_ids)
-
-    def equal_block_feature_weights(
-        self,
-        *,
-        device: torch.device | str | None = None,
-    ) -> torch.Tensor:
-        """Return feature weights where every block contributes equal total mass."""
-        block_weights = torch.full(
-            (self.n_blocks,),
-            1.0 / self.n_blocks,
-            dtype=torch.float32,
-            device=device,
+        feature_mask = torch.zeros(
+            (*block_mask.shape[:-1], self.input_dim),
+            dtype=torch.bool,
+            device=target_device,
         )
-        return self.expand_block_weights(block_weights, device=device)
-
+        for block_idx, block in enumerate(self.blocks):
+            feature_mask[..., block.start : block.stop] = block_mask[..., block_idx].unsqueeze(
+                -1
+            )
+        return feature_mask
 
 def mfeat_block_index() -> FeatureBlockIndex:
     return FeatureBlockIndex(

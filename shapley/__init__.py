@@ -10,7 +10,7 @@ from .estimators import BlockShapleyEstimator, MonteCarloShapleyEstimator, Sampl
 from .game import ReconstructionGame
 from .masking import apply_feature_mask
 from .node_sampler import AdaptiveNodeSampler, CoalitionNodeIndex, RollingNodeStats
-from .weights import ShapleyWeightResult, positive_shapley_weights
+from .weights import ShapleyWeightResult, auxiliary_shapley_weights
 
 __all__ = [
     "BaselineProvider",
@@ -30,5 +30,5 @@ __all__ = [
     "CoalitionNodeIndex",
     "RollingNodeStats",
     "ShapleyWeightResult",
-    "positive_shapley_weights",
+    "auxiliary_shapley_weights",
 ]

@@ -6,11 +6,12 @@ from torch import nn
 
 @dataclass(slots=True)
 class VAEConfig:
-    input_dim: int = 11
-    hidden_dims: tuple[int, ...] = (16, 8)
+    input_dim: int = 649
+    hidden_dims: tuple[int, ...] = (1024, 1024)
     latent_dim: int = 5
     input_dropout: float = 0.0
     deterministic_latent: bool = False
+    output_group_sizes: tuple[int, ...] = (76, 216, 64, 240, 47, 6)
 
 
 class Encoder(nn.Module):
@@ -34,15 +35,22 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, config: VAEConfig) -> None:
         super().__init__()
-        dims = (config.latent_dim, *reversed(config.hidden_dims), config.input_dim)
+        if sum(config.output_group_sizes) != config.input_dim:
+            raise ValueError("output_group_sizes must sum to input_dim.")
+        dims = (config.latent_dim, *reversed(config.hidden_dims))
         layers: list[nn.Module] = []
-        for in_dim, out_dim in zip(dims[:-2], dims[1:-1]):
+        for in_dim, out_dim in zip(dims[:-1], dims[1:]):
             layers.extend((nn.Linear(in_dim, out_dim), nn.ReLU()))
-        layers.append(nn.Linear(dims[-2], dims[-1]))
-        self.body = nn.Sequential(*layers)
+        self.trunk = nn.Sequential(*layers)
+        head_in_dim = dims[-1]
+        self.heads = nn.ModuleList(
+            nn.Linear(head_in_dim, group_size)
+            for group_size in config.output_group_sizes
+        )
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
-        return self.body(z)
+        h = self.trunk(z)
+        return torch.cat([head(h) for head in self.heads], dim=1)
 
 
 class VAE(nn.Module):

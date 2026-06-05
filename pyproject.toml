@@ -1,7 +1,7 @@
 [project]
 name = "shapley-guided-vae"
 version = "0.1.0"
-description = "Proof-of-concept: Shapley-guided VAE"
+description = "Pixel-auxiliary VAE with Shapley-scaled auxiliary reconstruction losses"
 requires-python = ">=3.11,<3.13"
 
 dependencies = [

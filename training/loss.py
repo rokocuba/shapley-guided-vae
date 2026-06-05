@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from shapley.blocks import FeatureBlockIndex
+from shapley.blocks import FeatureBlockIndex, mfeat_block_index
 
 
 @dataclass(slots=True)
@@ -11,64 +11,75 @@ class LossOutput:
     total: torch.Tensor
     recon: torch.Tensor
     recon_base: torch.Tensor
-    recon_unweighted: torch.Tensor
+    pix_recon: torch.Tensor
+    aux_recon_base: torch.Tensor
     kl: torch.Tensor
     feature_mse: torch.Tensor
+    block_losses: torch.Tensor
 
 
 class DynamicWeightedVAELoss(nn.Module):
     def __init__(
         self,
-        input_dim: int,
+        block_index: FeatureBlockIndex | None = None,
         beta: float = 1.0,
-        init_weights: torch.Tensor | None = None,
+        aux_loss_weight: float = 0.2,
+        primary_block: str = "pix",
     ) -> None:
         super().__init__()
-        w = torch.ones(input_dim) if init_weights is None else init_weights
-        w = w / w.sum()
-        self.register_buffer("feature_weights", w.clone())
-        self.register_buffer("base_feature_weights", w.clone())
+        self.block_index = block_index or mfeat_block_index()
         self.beta = beta
+        self.aux_loss_weight = float(aux_loss_weight)
+        self.primary_block = primary_block
+        if primary_block not in self.block_index.names:
+            raise ValueError(f"Unknown primary block: {primary_block}.")
 
-    @torch.no_grad()
-    def set_feature_weights(self, w: torch.Tensor, normalize: bool = True) -> None:
-        w = w.detach().to(self.feature_weights.device, self.feature_weights.dtype)
-        if normalize:
-            w = w / (w.sum() + 1e-12)
-        self.feature_weights.copy_(w)
-
-    @torch.no_grad()
-    def set_base_feature_weights(self, w: torch.Tensor | None = None) -> None:
-        if w is not None:
-            w = w.detach().to(
-                self.base_feature_weights.device,
-                self.base_feature_weights.dtype,
-            )
-            w = w / (w.sum() + 1e-12)
-            self.base_feature_weights.copy_(w)
-        self.feature_weights.copy_(self.base_feature_weights)
-
-    @torch.no_grad()
-    def set_uniform_feature_weights(self) -> None:
-        w = torch.full_like(self.feature_weights, 1.0 / self.feature_weights.numel())
-        self.set_base_feature_weights(w)
-
-    @torch.no_grad()
-    def set_block_weights(
-        self,
-        block_weights: torch.Tensor,
-        block_index: FeatureBlockIndex,
-    ) -> None:
-        if block_index.input_dim != self.feature_weights.numel():
-            raise ValueError(
-                f"Block index input_dim {block_index.input_dim} does not match "
-                f"loss input_dim {self.feature_weights.numel()}."
-            )
-        feature_weights = block_index.expand_block_weights(
-            block_weights,
-            device=self.feature_weights.device,
+        self.primary_block_idx = self.block_index.names.index(primary_block)
+        aux_indices = [
+            idx
+            for idx, block in enumerate(self.block_index.blocks)
+            if block.name != primary_block
+        ]
+        self.aux_block_names = tuple(self.block_index.blocks[idx].name for idx in aux_indices)
+        self.register_buffer(
+            "aux_block_indices",
+            torch.tensor(aux_indices, dtype=torch.long),
         )
-        self.set_feature_weights(feature_weights, normalize=True)
+        self.register_buffer(
+            "aux_weights",
+            torch.full((len(aux_indices),), 1.0 / len(aux_indices), dtype=torch.float32),
+        )
+
+    @torch.no_grad()
+    def set_aux_weights(self, weights: torch.Tensor) -> None:
+        if weights.shape[-1] != self.aux_block_indices.numel():
+            raise ValueError(
+                f"Expected {self.aux_block_indices.numel()} auxiliary weights, "
+                f"got {weights.shape[-1]}."
+            )
+        weights = weights.detach().to(
+            device=self.aux_weights.device,
+            dtype=self.aux_weights.dtype,
+        )
+        if not torch.isfinite(weights).all():
+            raise ValueError("auxiliary weights must be finite.")
+        if (weights < 0.0).any():
+            raise ValueError("auxiliary weights must be non-negative.")
+        total = weights.sum()
+        if float(total.item()) <= 0.0:
+            raise ValueError("auxiliary weights must have positive sum.")
+        self.aux_weights.copy_(weights / total)
+
+    @torch.no_grad()
+    def reset_aux_weights(self) -> None:
+        self.aux_weights.fill_(1.0 / self.aux_weights.numel())
+
+    def _block_losses(self, feature_mse: torch.Tensor) -> torch.Tensor:
+        losses = [
+            feature_mse[block.start : block.stop].mean()
+            for block in self.block_index.blocks
+        ]
+        return torch.stack(losses)
 
     def forward(
         self,
@@ -78,16 +89,27 @@ class DynamicWeightedVAELoss(nn.Module):
         logvar: torch.Tensor,
     ) -> LossOutput:
         feature_mse = (x_hat - x).pow(2).mean(dim=0)
-        recon = (feature_mse * self.feature_weights).sum()
-        recon_base = (feature_mse * self.base_feature_weights).sum()
-        recon_unweighted = feature_mse.mean()
+        block_losses = self._block_losses(feature_mse)
+        pix_recon = block_losses[self.primary_block_idx]
+        aux_losses = block_losses.index_select(0, self.aux_block_indices)
+        aux_weights = self.aux_weights.to(
+            device=block_losses.device,
+            dtype=block_losses.dtype,
+        )
+
+        aux_recon_base = aux_losses.mean()
+        aux_recon_weighted = (aux_weights * aux_losses).sum()
+        recon = pix_recon + self.aux_loss_weight * aux_recon_weighted
+        recon_base = pix_recon + self.aux_loss_weight * aux_recon_base
         kl = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=1).mean()
         total = recon + self.beta * kl
         return LossOutput(
             total=total,
             recon=recon,
             recon_base=recon_base,
-            recon_unweighted=recon_unweighted,
+            pix_recon=pix_recon,
+            aux_recon_base=aux_recon_base,
             kl=kl,
             feature_mse=feature_mse,
+            block_losses=block_losses,
         )

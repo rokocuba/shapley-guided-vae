@@ -66,6 +66,9 @@ def _build_model(run_dir: Path, metadata: dict, device: torch.device) -> VAE:
             latent_dim=int(cfg["latent_dim"]),
             input_dropout=float(cfg.get("input_dropout", 0.0)),
             deterministic_latent=bool(cfg.get("deterministic_latent", False)),
+            output_group_sizes=tuple(
+                int(v) for v in metadata["data"]["feature_group_sizes"]
+            ),
         )
     )
     model.load_state_dict(
@@ -209,10 +212,7 @@ def main() -> None:
     if not data_dir.is_absolute():
         data_dir = ROOT / data_dir
 
-    bundle = load_dataset_bundle(
-        data_dir=data_dir,
-        dataset_name=metadata["data"]["dataset_name"],
-    )
+    bundle = load_dataset_bundle(data_dir=data_dir)
     x_scaled = _scale_from_metadata(bundle.x_raw, metadata)
     split_indices = _select_split_indices(metadata, x_scaled.shape[0], args.split)
     selected_labels = (

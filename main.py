@@ -53,23 +53,34 @@ def _parse_hidden_dims(value: str) -> tuple[int, ...]:
     return dims
 
 
-def _normalize_static_joint_weights(
+def _make_static_joint_weights(
     values: list[float] | tuple[float, ...],
+    block_index: FeatureBlockIndex,
 ) -> torch.Tensor:
     weights = torch.tensor(values, dtype=torch.float32)
-    if weights.numel() != 6:
+    expected = block_index.n_blocks
+    if weights.numel() != expected:
         raise ValueError(
-            "static joint weights must contain exactly 6 floats in block order: "
-            "fou fac kar pix zer mor."
+            "static joint auxiliary weights must contain exactly 5 floats "
+            "in block order: fou fac kar zer mor."
         )
     if not torch.isfinite(weights).all():
-        raise ValueError("static joint weights must be finite.")
+        raise ValueError("static joint auxiliary weights must be finite.")
     if (weights < 0).any():
-        raise ValueError("static joint weights must be non-negative.")
+        raise ValueError("static joint auxiliary weights must be non-negative.")
     total = weights.sum()
-    if total <= 0:
-        raise ValueError("static joint weights must have positive sum.")
+    if float(total.item()) <= 0.0:
+        raise ValueError("static joint auxiliary weights must have positive sum.")
     return weights / total
+
+
+def _make_auxiliary_player_index(block_index: FeatureBlockIndex) -> FeatureBlockIndex:
+    player_index = block_index.excluding("pix")
+    if player_index.names != ("fou", "fac", "kar", "zer", "mor"):
+        raise ValueError(
+            "Expected auxiliary Shapley players in order: fou fac kar zer mor."
+        )
+    return player_index
 
 
 def _make_run_data_info(
@@ -118,15 +129,14 @@ def _make_run_data_info(
 
 def run_baseline(
     data_dir: str | Path = "data",
-    dataset_name: str = "mfeat",
     epochs: int = 2000,
     batch_size: int = 256,
     lr: float = 1e-3,
     lr_scheduler: str | None = "plateau",
     lr_scheduler_monitor: str = "loss",
     lr_min: float = 1e-8,
-    lr_plateau_factor: float = 0.9,
-    lr_plateau_patience: int = 15,
+    lr_plateau_factor: float = 0.3,
+    lr_plateau_patience: int = 5,
     lr_plateau_threshold: float = 1e-4,
     latent_dim: int = 5,
     hidden_dims: tuple[int, ...] | list[int] = (1024, 1024),
@@ -135,6 +145,7 @@ def run_baseline(
     input_dropout: float = 0.0,
     normalize_features: bool = True,
     deterministic_latent: bool = False,
+    aux_loss_weight: float = 0.2,
     beta: float = 0.08,
     beta_controller: str = "kl_target",
     kl_target: float | None = 3.0,
@@ -154,7 +165,7 @@ def run_baseline(
     shapley_tactic: str | None = None,
     output_dir: str | Path = "analysis/output/training_runs",
 ) -> list[dict[str, float]]:
-    bundle = load_dataset_bundle(data_dir=data_dir, dataset_name=dataset_name)
+    bundle = load_dataset_bundle(data_dir=data_dir)
     train_idx, test_idx = _make_split_indices(
         n_total=bundle.x_raw.shape[0],
         test_size=test_size,
@@ -177,10 +188,14 @@ def run_baseline(
             latent_dim=latent_dim,
             input_dropout=input_dropout,
             deterministic_latent=deterministic_latent,
+            output_group_sizes=block_index.sizes,
         )
     )
-    loss_fn = DynamicWeightedVAELoss(input_dim=x_scaled.shape[1], beta=beta)
-    loss_fn.set_base_feature_weights(block_index.equal_block_feature_weights())
+    loss_fn = DynamicWeightedVAELoss(
+        block_index=block_index,
+        beta=beta,
+        aux_loss_weight=aux_loss_weight,
+    )
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     beta_controller_name = beta_controller.strip().lower()
     resolved_kl_target = None
@@ -217,7 +232,7 @@ def run_baseline(
             else max(float(kl_target_start), resolved_kl_target)
         )
         resolved_kl_target_warmup_epochs = (
-            max(1, int(round(0.8 * epochs)))
+            max(1, int(round(0.7 * epochs)))
             if kl_target_warmup_epochs is None
             else int(kl_target_warmup_epochs)
         )
@@ -259,6 +274,13 @@ def run_baseline(
         callbacks=callbacks,
         scheduler=scheduler,
         scheduler_monitor=lr_scheduler_monitor,
+        scheduler_start_epoch=(
+            resolved_kl_target_warmup_epochs
+            if beta_controller_name == "kl_target"
+            and lr_scheduler is not None
+            and lr_scheduler.strip().lower() == "plateau"
+            else 0
+        ),
     )
     train_tensor = x_scaled[train_idx]
     test_tensor = x_scaled[test_idx]
@@ -302,6 +324,7 @@ def run_baseline(
             "lr_plateau_factor": lr_plateau_factor,
             "lr_plateau_patience": lr_plateau_patience,
             "lr_plateau_threshold": lr_plateau_threshold,
+            "lr_scheduler_start_epoch": trainer.scheduler_start_epoch,
             "latent_dim": latent_dim,
             "dataset_name": bundle.dataset_name,
             "test_size": test_size,
@@ -310,6 +333,7 @@ def run_baseline(
             "input_dropout": input_dropout,
             "normalize_features": normalize_features,
             "deterministic_latent": deterministic_latent,
+            "aux_loss_weight": aux_loss_weight,
             "beta": beta,
             "beta_controller": beta_controller_name,
             "kl_target": resolved_kl_target,
@@ -325,8 +349,11 @@ def run_baseline(
             "beta_start": beta_start,
             "beta_warmup_epochs": beta_warmup_epochs,
             "device": str(trainer.device),
-            "reconstruction_loss": "block_normalized_mse",
-            "base_feature_weighting": "equal_block_mass",
+            "reconstruction_loss": "pix_aux_mse",
+            "primary_reconstruction_block": "pix",
+            "auxiliary_blocks": [
+                block.name for block in block_index.blocks if block.name != "pix"
+            ],
         },
         data_info={
             "data_dir": str(data_dir),
@@ -375,15 +402,14 @@ def run_baseline(
 
 def run_shapley_experiment(
     data_dir: str | Path = "data",
-    dataset_name: str = "mfeat",
     epochs: int = 2000,
     batch_size: int = 256,
     lr: float = 1e-3,
     lr_scheduler: str | None = "plateau",
     lr_scheduler_monitor: str = "loss",
     lr_min: float = 1e-8,
-    lr_plateau_factor: float = 0.9,
-    lr_plateau_patience: int = 15,
+    lr_plateau_factor: float = 0.3,
+    lr_plateau_patience: int = 5,
     lr_plateau_threshold: float = 1e-4,
     latent_dim: int = 5,
     hidden_dims: tuple[int, ...] | list[int] = (1024, 1024),
@@ -392,6 +418,7 @@ def run_shapley_experiment(
     input_dropout: float = 0.0,
     normalize_features: bool = True,
     deterministic_latent: bool = False,
+    aux_loss_weight: float = 0.2,
     beta: float = 0.08,
     beta_controller: str = "kl_target",
     kl_target: float | None = 3.0,
@@ -410,13 +437,12 @@ def run_shapley_experiment(
     output_dir: str | Path = "analysis/output/training_runs",
     shapley_tactic: str = "baseline",
     shapley_warmup_epochs: int = 100,
-    shapley_min_sampling_phases_before_c: int = 5,
+    shapley_min_sampling_phases: int = 5,
     shapley_group_size: int = 16,
     shapley_sampling_batch_size: int = 512,
-    shapley_phase_c_epochs: int = 1,
     shapley_all_nonpositive_policy: str = "error",
 ) -> list[dict[str, object]]:
-    bundle = load_dataset_bundle(data_dir=data_dir, dataset_name=dataset_name)
+    bundle = load_dataset_bundle(data_dir=data_dir)
     train_idx, test_idx = _make_split_indices(
         n_total=bundle.x_raw.shape[0],
         test_size=test_size,
@@ -430,6 +456,7 @@ def run_shapley_experiment(
     x_scaled = torch.from_numpy(transform_features(bundle.x_raw, scaler))
     hidden_dims_tuple = tuple(int(v) for v in hidden_dims)
     block_index = FeatureBlockIndex.from_feature_groups(bundle.feature_groups)
+    player_block_index = _make_auxiliary_player_index(block_index)
     model = VAE(
         VAEConfig(
             input_dim=x_scaled.shape[1],
@@ -437,10 +464,14 @@ def run_shapley_experiment(
             latent_dim=latent_dim,
             input_dropout=input_dropout,
             deterministic_latent=deterministic_latent,
+            output_group_sizes=block_index.sizes,
         )
     )
-    loss_fn = DynamicWeightedVAELoss(input_dim=x_scaled.shape[1], beta=beta)
-    loss_fn.set_base_feature_weights(block_index.equal_block_feature_weights())
+    loss_fn = DynamicWeightedVAELoss(
+        block_index=block_index,
+        beta=beta,
+        aux_loss_weight=aux_loss_weight,
+    )
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     beta_controller_name = beta_controller.strip().lower()
     resolved_kl_target = None
@@ -477,7 +508,7 @@ def run_shapley_experiment(
             else max(float(kl_target_start), resolved_kl_target)
         )
         resolved_kl_target_warmup_epochs = (
-            max(1, int(round(0.8 * epochs)))
+            max(1, int(round(0.7 * epochs)))
             if kl_target_warmup_epochs is None
             else int(kl_target_warmup_epochs)
         )
@@ -519,6 +550,13 @@ def run_shapley_experiment(
         callbacks=callbacks,
         scheduler=scheduler,
         scheduler_monitor=lr_scheduler_monitor,
+        scheduler_start_epoch=(
+            resolved_kl_target_warmup_epochs
+            if beta_controller_name == "kl_target"
+            and lr_scheduler is not None
+            and lr_scheduler.strip().lower() == "plateau"
+            else 0
+        ),
     )
     train_tensor = x_scaled[train_idx]
     test_tensor = x_scaled[test_idx]
@@ -537,26 +575,29 @@ def run_shapley_experiment(
     )
     estimator = BlockShapleyEstimator(
         model=trainer.model,
-        block_index=block_index,
+        block_index=player_block_index,
+        value_block_index=block_index,
         baseline_provider=baseline_provider,
         group_size=shapley_group_size,
+        primary_block="pix",
     )
     result = run_shapley_training(
         trainer=trainer,
         train_loader=train_loader,
         train_tensor=train_tensor,
         estimator=estimator,
-        block_index=block_index,
+        block_index=player_block_index,
         config=ShapleyTrainingConfig(
             total_epochs=epochs,
             warmup_epochs=shapley_warmup_epochs,
-            min_sampling_phases_before_c=shapley_min_sampling_phases_before_c,
-            phase_c_epochs=shapley_phase_c_epochs,
+            min_sampling_phases_before_dynamic=shapley_min_sampling_phases,
             sampling_batch_size=shapley_sampling_batch_size,
             all_nonpositive_policy=shapley_all_nonpositive_policy,
+            tactic=shapley_tactic,
         ),
         val_loader=test_loader,
         train_labels=labels_train,
+        reference_tensor=test_tensor,
     )
 
     run_dir = save_training_run(
@@ -573,6 +614,7 @@ def run_shapley_experiment(
             "lr_plateau_factor": lr_plateau_factor,
             "lr_plateau_patience": lr_plateau_patience,
             "lr_plateau_threshold": lr_plateau_threshold,
+            "lr_scheduler_start_epoch": trainer.scheduler_start_epoch,
             "latent_dim": latent_dim,
             "dataset_name": bundle.dataset_name,
             "test_size": test_size,
@@ -581,6 +623,7 @@ def run_shapley_experiment(
             "input_dropout": input_dropout,
             "normalize_features": normalize_features,
             "deterministic_latent": deterministic_latent,
+            "aux_loss_weight": aux_loss_weight,
             "beta": beta,
             "beta_controller": beta_controller_name,
             "kl_target": resolved_kl_target,
@@ -596,22 +639,29 @@ def run_shapley_experiment(
             "beta_start": beta_start,
             "beta_warmup_epochs": beta_warmup_epochs,
             "device": str(trainer.device),
-            "reconstruction_loss": "block_normalized_mse",
-            "base_feature_weighting": "equal_block_mass",
+            "reconstruction_loss": "pix_aux_mse",
+            "primary_reconstruction_block": "pix",
+            "auxiliary_blocks": [
+                block.name for block in block_index.blocks if block.name != "pix"
+            ],
             "shapley": {
-                "players": list(block_index.names),
+                "players": list(player_block_index.names),
+                "n_players": player_block_index.n_blocks,
+                "n_nodes": 2**player_block_index.n_blocks,
+                "target_block": "pix",
                 "tactic": shapley_tactic,
-                "training_strategy": "joint_encoder_shapley_decoder_base",
+                "payoff": "pixel_reconstruction",
+                "training_strategy": "single_objective_dynamic_aux_weights",
                 "warmup_epochs": shapley_warmup_epochs,
                 "group_size": shapley_group_size,
                 "sampling_batch_size": shapley_sampling_batch_size,
-                "min_sampling_phases_before_c": shapley_min_sampling_phases_before_c,
-                "phase_c_epochs": shapley_phase_c_epochs,
-                "phase_c_epochs_ignored": True,
+                "min_sampling_phases_before_dynamic": shapley_min_sampling_phases,
                 "node_effective_count_unit": "rows",
                 "node_effective_count_max": 256,
-                "node_forgetting_signal": "global_reconstruction_progress",
+                "node_forgetting_signal": "validation_pixel_reconstruction_progress",
                 "all_nonpositive_policy": shapley_all_nonpositive_policy,
+                "weight_mapping": "positive_share",
+                "auxiliary_weight_budget": 1.0,
             },
         },
         data_info=_make_run_data_info(
@@ -662,15 +712,14 @@ def run_shapley_experiment(
 
 def run_static_joint_experiment(
     data_dir: str | Path = "data",
-    dataset_name: str = "mfeat",
     epochs: int = 2000,
     batch_size: int = 256,
     lr: float = 1e-3,
     lr_scheduler: str | None = "plateau",
     lr_scheduler_monitor: str = "loss",
     lr_min: float = 1e-8,
-    lr_plateau_factor: float = 0.9,
-    lr_plateau_patience: int = 15,
+    lr_plateau_factor: float = 0.3,
+    lr_plateau_patience: int = 5,
     lr_plateau_threshold: float = 1e-4,
     latent_dim: int = 5,
     hidden_dims: tuple[int, ...] | list[int] = (1024, 1024),
@@ -679,6 +728,7 @@ def run_static_joint_experiment(
     input_dropout: float = 0.0,
     normalize_features: bool = True,
     deterministic_latent: bool = False,
+    aux_loss_weight: float = 0.2,
     beta: float = 0.08,
     beta_controller: str = "kl_target",
     kl_target: float | None = 3.0,
@@ -695,10 +745,9 @@ def run_static_joint_experiment(
     beta_warmup_epochs: int = 100,
     device: str | None = None,
     output_dir: str | Path = "analysis/output/training_runs",
-    static_joint_weights: list[float] | tuple[float, ...] = (1, 1, 1, 1, 1, 1),
+    static_joint_aux_weights: list[float] | tuple[float, ...] = (1, 1, 1, 1, 1),
 ) -> list[dict[str, object]]:
-    block_weights = _normalize_static_joint_weights(static_joint_weights)
-    bundle = load_dataset_bundle(data_dir=data_dir, dataset_name=dataset_name)
+    bundle = load_dataset_bundle(data_dir=data_dir)
     train_idx, test_idx = _make_split_indices(
         n_total=bundle.x_raw.shape[0],
         test_size=test_size,
@@ -712,11 +761,11 @@ def run_static_joint_experiment(
     x_scaled = torch.from_numpy(transform_features(bundle.x_raw, scaler))
     hidden_dims_tuple = tuple(int(v) for v in hidden_dims)
     block_index = FeatureBlockIndex.from_feature_groups(bundle.feature_groups)
-    if block_index.n_blocks != block_weights.numel():
-        raise ValueError(
-            f"Expected {block_index.n_blocks} static weights for dataset "
-            f"{bundle.dataset_name}, got {block_weights.numel()}."
-        )
+    player_block_index = _make_auxiliary_player_index(block_index)
+    aux_weights = _make_static_joint_weights(
+        static_joint_aux_weights,
+        player_block_index,
+    )
     model = VAE(
         VAEConfig(
             input_dim=x_scaled.shape[1],
@@ -724,10 +773,14 @@ def run_static_joint_experiment(
             latent_dim=latent_dim,
             input_dropout=input_dropout,
             deterministic_latent=deterministic_latent,
+            output_group_sizes=block_index.sizes,
         )
     )
-    loss_fn = DynamicWeightedVAELoss(input_dim=x_scaled.shape[1], beta=beta)
-    loss_fn.set_base_feature_weights(block_index.equal_block_feature_weights())
+    loss_fn = DynamicWeightedVAELoss(
+        block_index=block_index,
+        beta=beta,
+        aux_loss_weight=aux_loss_weight,
+    )
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     beta_controller_name = beta_controller.strip().lower()
     resolved_kl_target = None
@@ -764,7 +817,7 @@ def run_static_joint_experiment(
             else max(float(kl_target_start), resolved_kl_target)
         )
         resolved_kl_target_warmup_epochs = (
-            max(1, int(round(0.8 * epochs)))
+            max(1, int(round(0.7 * epochs)))
             if kl_target_warmup_epochs is None
             else int(kl_target_warmup_epochs)
         )
@@ -806,6 +859,13 @@ def run_static_joint_experiment(
         callbacks=callbacks,
         scheduler=scheduler,
         scheduler_monitor=lr_scheduler_monitor,
+        scheduler_start_epoch=(
+            resolved_kl_target_warmup_epochs
+            if beta_controller_name == "kl_target"
+            and lr_scheduler is not None
+            and lr_scheduler.strip().lower() == "plateau"
+            else 0
+        ),
     )
     train_tensor = x_scaled[train_idx]
     test_tensor = x_scaled[test_idx]
@@ -825,7 +885,7 @@ def run_static_joint_experiment(
         block_index=block_index,
         config=StaticJointTrainingConfig(
             total_epochs=epochs,
-            block_weights=block_weights,
+            aux_weights=aux_weights,
         ),
         val_loader=test_loader,
     )
@@ -844,6 +904,7 @@ def run_static_joint_experiment(
             "lr_plateau_factor": lr_plateau_factor,
             "lr_plateau_patience": lr_plateau_patience,
             "lr_plateau_threshold": lr_plateau_threshold,
+            "lr_scheduler_start_epoch": trainer.scheduler_start_epoch,
             "latent_dim": latent_dim,
             "dataset_name": bundle.dataset_name,
             "test_size": test_size,
@@ -852,6 +913,7 @@ def run_static_joint_experiment(
             "input_dropout": input_dropout,
             "normalize_features": normalize_features,
             "deterministic_latent": deterministic_latent,
+            "aux_loss_weight": aux_loss_weight,
             "beta": beta,
             "beta_controller": beta_controller_name,
             "kl_target": resolved_kl_target,
@@ -867,13 +929,16 @@ def run_static_joint_experiment(
             "beta_start": beta_start,
             "beta_warmup_epochs": beta_warmup_epochs,
             "device": str(trainer.device),
-            "reconstruction_loss": "block_normalized_mse",
-            "base_feature_weighting": "equal_block_mass",
+            "reconstruction_loss": "pix_aux_mse",
+            "primary_reconstruction_block": "pix",
+            "auxiliary_blocks": [
+                block.name for block in block_index.blocks if block.name != "pix"
+            ],
             "static_joint": {
-                "players": list(block_index.names),
-                "training_strategy": "static_joint_encoder_weighted_decoder_base",
-                "block_weights": [float(v) for v in block_weights.tolist()],
-                "weight_order": list(block_index.names),
+                "players": list(player_block_index.names),
+                "training_strategy": "single_objective_static_aux_weights",
+                "aux_weights": [float(v) for v in aux_weights.tolist()],
+                "weight_order": list(player_block_index.names),
             },
         },
         data_info=_make_run_data_info(
@@ -916,15 +981,14 @@ def run_static_joint_experiment(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
-    parser.add_argument("--dataset-name", type=str, default="mfeat")
     parser.add_argument("--epochs", type=int, default=2000)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--lr-scheduler", type=str, default="plateau")
     parser.add_argument("--lr-scheduler-monitor", type=str, default="loss")
-    parser.add_argument("--lr-min", type=float, default=1e-5)
-    parser.add_argument("--lr-plateau-factor", type=float, default=0.9)
-    parser.add_argument("--lr-plateau-patience", type=int, default=15)
+    parser.add_argument("--lr-min", type=float, default=1e-7)
+    parser.add_argument("--lr-plateau-factor", type=float, default=0.3)
+    parser.add_argument("--lr-plateau-patience", type=int, default=5)
     parser.add_argument("--lr-plateau-threshold", type=float, default=1e-4)
     parser.add_argument("--latent-dim", type=int, default=5)
     parser.add_argument("--hidden-dims", type=str, default="1024,1024")
@@ -933,6 +997,7 @@ def main() -> None:
     parser.add_argument("--input-dropout", type=float, default=0.0)
     parser.add_argument("--no-normalize-features", action="store_true")
     parser.add_argument("--deterministic-latent", action="store_true")
+    parser.add_argument("--aux-loss-weight", type=float, default=0.2)
     parser.add_argument("--beta", type=float, default=0.08)
     parser.add_argument(
         "--beta-controller",
@@ -956,18 +1021,18 @@ def main() -> None:
     parser.add_argument(
         "--training-type",
         type=str,
-        choices=("baseline", "shapley", "static-joint"),
+        choices=("baseline", "shapley", "static-joint", "pix_only"),
         default="baseline",
     )
     parser.add_argument(
-        "--static-joint-weights",
+        "--static-joint-aux-weights",
         type=float,
-        nargs=6,
-        metavar=("FOU", "FAC", "KAR", "PIX", "ZER", "MOR"),
+        nargs=5,
+        metavar=("FOU", "FAC", "KAR", "ZER", "MOR"),
         default=None,
         help=(
-            "Six static block weights for --training-type static-joint, in Mfeat "
-            "block order: fou fac kar pix zer mor. Values are normalized internally."
+            "Five static auxiliary weights for --training-type static-joint, "
+            "in Mfeat block order: fou fac kar zer mor. Values are normalized to sum to 1."
         ),
     )
     parser.add_argument(
@@ -978,18 +1043,12 @@ def main() -> None:
     )
     parser.add_argument("--shapley-warmup-epochs", type=int, default=100)
     parser.add_argument(
-        "--shapley-min-sampling-phases-before-c",
+        "--shapley-min-sampling-phases",
         type=int,
         default=5,
     )
     parser.add_argument("--shapley-group-size", type=int, default=16)
     parser.add_argument("--shapley-sampling-batch-size", type=int, default=512)
-    parser.add_argument(
-        "--shapley-phase-c-epochs",
-        type=int,
-        default=1,
-        help="Deprecated compatibility option. Shapley training now uses joint A steps instead of extra C epochs.",
-    )
     parser.add_argument(
         "--shapley-all-nonpositive-policy",
         type=str,
@@ -1006,7 +1065,6 @@ def main() -> None:
     if args.training_type == "shapley":
         history = run_shapley_experiment(
             data_dir=args.data_dir,
-            dataset_name=args.dataset_name,
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,
@@ -1023,6 +1081,7 @@ def main() -> None:
             input_dropout=args.input_dropout,
             normalize_features=not args.no_normalize_features,
             deterministic_latent=args.deterministic_latent,
+            aux_loss_weight=args.aux_loss_weight,
             beta=args.beta,
             beta_controller=args.beta_controller,
             kl_target=args.kl_target,
@@ -1041,21 +1100,19 @@ def main() -> None:
             output_dir=args.output_dir,
             shapley_tactic=args.shapley_tactic,
             shapley_warmup_epochs=args.shapley_warmup_epochs,
-            shapley_min_sampling_phases_before_c=args.shapley_min_sampling_phases_before_c,
+            shapley_min_sampling_phases=args.shapley_min_sampling_phases,
             shapley_group_size=args.shapley_group_size,
             shapley_sampling_batch_size=args.shapley_sampling_batch_size,
-            shapley_phase_c_epochs=args.shapley_phase_c_epochs,
             shapley_all_nonpositive_policy=args.shapley_all_nonpositive_policy,
         )
     elif args.training_type == "static-joint":
-        if args.static_joint_weights is None:
+        if args.static_joint_aux_weights is None:
             raise ValueError(
-                "--training-type static-joint requires --static-joint-weights "
-                "with 6 floats in order: fou fac kar pix zer mor."
+                "--training-type static-joint requires --static-joint-aux-weights "
+                "with 5 auxiliary weights in order: fou fac kar zer mor."
             )
         history = run_static_joint_experiment(
             data_dir=args.data_dir,
-            dataset_name=args.dataset_name,
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,
@@ -1072,6 +1129,7 @@ def main() -> None:
             input_dropout=args.input_dropout,
             normalize_features=not args.no_normalize_features,
             deterministic_latent=args.deterministic_latent,
+            aux_loss_weight=args.aux_loss_weight,
             beta=args.beta,
             beta_controller=args.beta_controller,
             kl_target=args.kl_target,
@@ -1088,12 +1146,11 @@ def main() -> None:
             beta_warmup_epochs=args.beta_warmup_epochs,
             device=args.device,
             output_dir=args.output_dir,
-            static_joint_weights=args.static_joint_weights,
+            static_joint_aux_weights=args.static_joint_aux_weights,
         )
     else:
         history = run_baseline(
             data_dir=args.data_dir,
-            dataset_name=args.dataset_name,
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,
@@ -1110,6 +1167,7 @@ def main() -> None:
             input_dropout=args.input_dropout,
             normalize_features=not args.no_normalize_features,
             deterministic_latent=args.deterministic_latent,
+            aux_loss_weight=args.aux_loss_weight,
             beta=args.beta,
             beta_controller=args.beta_controller,
             kl_target=args.kl_target,

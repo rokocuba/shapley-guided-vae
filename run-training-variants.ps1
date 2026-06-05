@@ -1,33 +1,55 @@
-# Activate the local virtual environment and run baseline + Shapley variants
 Set-StrictMode -Version Latest
 Set-Location $PSScriptRoot
 
-$activatePath = Join-Path $PSScriptRoot '.venv\Scripts\Activate.ps1'
-if (-not (Test-Path $activatePath)) {
-    Write-Error "Virtual environment activation script not found: $activatePath"
+$python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $python)) {
+    Write-Error "Python not found: $python"
     exit 1
 }
 
-# Define settings as arrays for reuse with splatting
-$settings = @('--lr', '1e-4', '--lr-min', '1e-6', '--epochs', '200', '--latent-dim', '5', '--hidden-dims', '64,16')
-$shapleySettings = @('--shapley-warmup-epochs', '30')
+$outDir = 'analysis/output/training_runs'
+$common = @(
+    '--epochs', '200',
+    '--batch-size', '256',
+    '--hidden-dims', '1024,1024',
+    '--latent-dim', '8',
+    '--kl-target', '3.00',
+    '--aux-loss-weight', '0.4',
+    '--lr-plateau-factor', '0.7',
+    '--lr-scheduler-monitor', 'val_pix_recon',
+    '--output-dir', $outDir
+)
+$shapley = @(
+    '--shapley-warmup-epochs', '50',
+    '--shapley-min-sampling-phases', '3',
+    '--shapley-group-size', '16',
+    '--shapley-sampling-batch-size', '512'
+)
 
-Write-Host "Activating venv..."
-& $activatePath
+Write-Host 'E0 baseline'
+& $python .\main.py --training-type baseline @common
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Running baseline training..."
-python .\main.py @settings
+Write-Host 'E0_0 pix_only'
+& $python .\main.py --training-type pix_only --aux-loss-weight 0 @common
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Running Shapley training..."
-python .\main.py --training-type shapley @settings @shapleySettings
+Write-Host 'E1 Shapley baseline tactic'
+& $python .\main.py --training-type shapley --shapley-tactic baseline @common @shapley
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Running Shapley marginal training..."
-python .\main.py --training-type shapley --shapley-tactic marginal @settings @shapleySettings
+Write-Host 'E2 Shapley marginal tactic'
+& $python .\main.py --training-type shapley --shapley-tactic marginal @common @shapley
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Running Shapley conditional training..."
-python .\main.py --training-type shapley --shapley-tactic conditional @settings @shapleySettings
+Write-Host 'E3 Shapley conditional tactic'
+& $python .\main.py --training-type shapley --shapley-tactic conditional @common @shapley
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Plotting training results..."
-python .\analysis\plot_training_results.py --runs .\analysis\output\training_runs --out .\analysis\output\training_runs --all-runs
+Write-Host 'Plotting runs'
+& $python .\analysis\plot_training_results.py --runs $outDir --out $outDir --all-runs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-python .\analysis\compare_mean_baselines.py --out-dir .\analysis\output\training_runs
+Write-Host 'Comparing simple pixel baselines'
+& $python .\analysis\compare_mean_baselines.py --out-dir $outDir
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

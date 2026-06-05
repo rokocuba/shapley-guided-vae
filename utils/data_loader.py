@@ -22,9 +22,6 @@ class TabularDatasetBundle:
     x_scaled: torch.Tensor | None = None
 
 
-WineDataBundle = TabularDatasetBundle
-
-
 def _resolve_dataset_dir(
     data_dir: str | Path, dataset_name: str, required_files: list[str]
 ) -> Path:
@@ -65,28 +62,6 @@ def _attach_full_dataset_scaling(bundle: TabularDatasetBundle) -> TabularDataset
     bundle.scaler = scaler
     bundle.x_scaled = torch.from_numpy(transform_features(bundle.x_raw, scaler))
     return bundle
-
-
-def load_wine_raw_bundle(data_dir: str | Path) -> TabularDatasetBundle:
-    dataset_dir = _resolve_dataset_dir(
-        data_dir,
-        dataset_name="wine-quality",
-        required_files=["winequality-red.csv", "winequality-white.csv"],
-    )
-    red = pd.read_csv(dataset_dir / "winequality-red.csv", sep=";")
-    white = pd.read_csv(dataset_dir / "winequality-white.csv", sep=";")
-    red["wine_type"] = "red"
-    white["wine_type"] = "white"
-    both = pd.concat((red, white), axis=0, ignore_index=True)
-    feature_frame = both.drop(columns=["quality", "wine_type"])
-    return TabularDatasetBundle(
-        dataset_name="wine-quality",
-        x_raw=feature_frame.to_numpy(dtype="float32", copy=True),
-        feature_names=list(feature_frame.columns),
-        feature_groups=list(feature_frame.columns),
-        sample_labels=both["wine_type"].to_numpy(copy=True),
-        label_name="wine_type",
-    )
 
 
 def load_mfeat_raw_bundle(data_dir: str | Path) -> TabularDatasetBundle:
@@ -131,40 +106,21 @@ def load_mfeat_raw_bundle(data_dir: str | Path) -> TabularDatasetBundle:
 
 def load_dataset_bundle(
     data_dir: str | Path = "data",
-    dataset_name: str = "mfeat",
     fit_scaler: bool = False,
 ) -> TabularDatasetBundle:
-    normalized_name = dataset_name.strip().lower()
-    if normalized_name in {"wine", "wine-quality", "wine_quality"}:
-        bundle = load_wine_raw_bundle(data_dir)
-    elif normalized_name == "mfeat":
-        bundle = load_mfeat_raw_bundle(data_dir)
-    else:
-        raise ValueError(
-            "Unknown dataset_name. Supported values: 'mfeat' and 'wine-quality'."
-        )
+    bundle = load_mfeat_raw_bundle(data_dir)
     return _attach_full_dataset_scaling(bundle) if fit_scaler else bundle
 
 
-def load_wine_bundle(data_dir: str | Path) -> WineDataBundle:
-    return load_dataset_bundle(
-        data_dir=data_dir,
-        dataset_name="wine-quality",
-        fit_scaler=True,
-    )
-
-
 def load_mfeat_bundle(data_dir: str | Path) -> TabularDatasetBundle:
-    return load_dataset_bundle(data_dir=data_dir, dataset_name="mfeat", fit_scaler=True)
+    return load_dataset_bundle(data_dir=data_dir, fit_scaler=True)
 
 
 def load_dataset_features(
     data_dir: str | Path = "data",
-    dataset_name: str = "mfeat",
 ) -> torch.Tensor:
     bundle = load_dataset_bundle(
         data_dir=data_dir,
-        dataset_name=dataset_name,
         fit_scaler=True,
     )
     if bundle.x_scaled is None:
@@ -172,26 +128,12 @@ def load_dataset_features(
     return bundle.x_scaled
 
 
-def load_wine_features(data_dir: str | Path) -> torch.Tensor:
-    return load_dataset_features(data_dir=data_dir, dataset_name="wine-quality")
-
-
 def make_dataset_dataloader(
     data_dir: str | Path = "data",
-    dataset_name: str = "mfeat",
     batch_size: int = 128,
     shuffle: bool = True,
 ) -> DataLoader:
-    x = load_dataset_features(data_dir=data_dir, dataset_name=dataset_name)
+    x = load_dataset_features(data_dir=data_dir)
     return DataLoader(TensorDataset(x), batch_size=batch_size, shuffle=shuffle)
 
 
-def make_wine_dataloader(
-    data_dir: str | Path, batch_size: int = 128, shuffle: bool = True
-) -> DataLoader:
-    return make_dataset_dataloader(
-        data_dir=data_dir,
-        dataset_name="wine-quality",
-        batch_size=batch_size,
-        shuffle=shuffle,
-    )

@@ -15,8 +15,22 @@ if str(ROOT) not in sys.path:
 from training import load_training_runs
 
 
+CURRENT_SHAPLEY_PLAYERS = ["fou", "fac", "kar", "zer", "mor"]
+
+
+def _is_current_method(record: object) -> bool:
+    if record.training_type != "shapley":
+        return True
+    shapley_config = record.config.get("shapley", {})
+    return (
+        shapley_config.get("n_players") == 5
+        and shapley_config.get("players") == CURRENT_SHAPLEY_PLAYERS
+        and shapley_config.get("weight_mapping") == "positive_share"
+    )
+
+
 def _latest_runs_per_training_variant(run_dir: Path) -> set[str]:
-    runs = load_training_runs(run_dir)
+    runs = [r for r in load_training_runs(run_dir) if _is_current_method(r)]
     latest: dict[tuple[str, str], object] = {}
     for r in runs:
         key = (r.training_type, r.shapley_tactic or "none")
@@ -29,7 +43,7 @@ def _latest_runs_per_training_variant(run_dir: Path) -> set[str]:
 def build_summary_frame(
     run_dir: Path, selected_run_ids: set[str] | None = None
 ) -> pd.DataFrame:
-    runs = load_training_runs(run_dir)
+    runs = [r for r in load_training_runs(run_dir) if _is_current_method(r)]
     rows: list[dict[str, object]] = []
     for r in runs:
         if selected_run_ids is not None and r.run_id not in selected_run_ids:
@@ -47,13 +61,15 @@ def build_summary_frame(
                 "final_loss": r.final_metrics.get("loss"),
                 "final_recon": r.final_metrics.get("recon"),
                 "final_recon_base": r.final_metrics.get("recon_base"),
-                "final_recon_unweighted": r.final_metrics.get("recon_unweighted"),
+                "final_pix_recon": r.final_metrics.get("pix_recon"),
+                "final_aux_recon_base": r.final_metrics.get("aux_recon_base"),
                 "final_kl": r.final_metrics.get("kl"),
                 "final_val_loss": r.final_metrics.get("val_loss"),
                 "final_val_recon": r.final_metrics.get("val_recon"),
                 "final_val_recon_base": r.final_metrics.get("val_recon_base"),
-                "final_val_recon_unweighted": r.final_metrics.get(
-                    "val_recon_unweighted"
+                "final_val_pix_recon": r.final_metrics.get("val_pix_recon"),
+                "final_val_aux_recon_base": r.final_metrics.get(
+                    "val_aux_recon_base"
                 ),
                 "final_val_kl": r.final_metrics.get("val_kl"),
             }
@@ -64,7 +80,7 @@ def build_summary_frame(
 def build_history_frame(
     run_dir: Path, selected_run_ids: set[str] | None = None
 ) -> pd.DataFrame:
-    runs = load_training_runs(run_dir)
+    runs = [r for r in load_training_runs(run_dir) if _is_current_method(r)]
     frames: list[pd.DataFrame] = []
     for r in runs:
         if selected_run_ids is not None and r.run_id not in selected_run_ids:
@@ -93,7 +109,7 @@ def _read_optional_artifact(record: object, key: str) -> pd.DataFrame:
 def build_shapley_weights_frame(
     run_dir: Path, selected_run_ids: set[str] | None = None
 ) -> pd.DataFrame:
-    runs = load_training_runs(run_dir)
+    runs = [r for r in load_training_runs(run_dir) if _is_current_method(r)]
     frames: list[pd.DataFrame] = []
     for r in runs:
         if selected_run_ids is not None and r.run_id not in selected_run_ids:
@@ -111,7 +127,7 @@ def build_shapley_weights_frame(
 def build_shapley_node_stats_frame(
     run_dir: Path, selected_run_ids: set[str] | None = None
 ) -> pd.DataFrame:
-    runs = load_training_runs(run_dir)
+    runs = [r for r in load_training_runs(run_dir) if _is_current_method(r)]
     frames: list[pd.DataFrame] = []
     for r in runs:
         if selected_run_ids is not None and r.run_id not in selected_run_ids:
@@ -129,7 +145,7 @@ def build_shapley_node_stats_frame(
 def build_shapley_phase_timing_frame(
     run_dir: Path, selected_run_ids: set[str] | None = None
 ) -> pd.DataFrame:
-    runs = load_training_runs(run_dir)
+    runs = [r for r in load_training_runs(run_dir) if _is_current_method(r)]
     frames: list[pd.DataFrame] = []
     for r in runs:
         if selected_run_ids is not None and r.run_id not in selected_run_ids:
@@ -284,7 +300,7 @@ def build_baseline_relative_delta_frame(history: pd.DataFrame) -> pd.DataFrame:
         df["logical_epoch"] = df["epoch"]
 
     required = ["logical_epoch", "training_type", "shapley_tactic"]
-    metric_keys = ["recon_base", "val_recon_base", "val_kl"]
+    metric_keys = ["pix_recon", "val_pix_recon", "val_kl"]
     if any(col not in df.columns for col in required):
         return pd.DataFrame()
     if any(metric not in df.columns for metric in metric_keys):
@@ -304,16 +320,16 @@ def build_baseline_relative_delta_frame(history: pd.DataFrame) -> pd.DataFrame:
         ["logical_epoch", *metric_keys]
     ].rename(
         columns={
-            "recon_base": "baseline_recon_base",
-            "val_recon_base": "baseline_val_recon_base",
+            "pix_recon": "baseline_pix_recon",
+            "val_pix_recon": "baseline_val_pix_recon",
             "val_kl": "baseline_val_kl",
         }
     )
     merged = shapley.merge(baseline_metrics, on="logical_epoch", how="inner")
     rows: list[dict[str, object]] = []
     metric_labels = {
-        "recon_base": "train_recon_base",
-        "val_recon_base": "test_recon_base",
+        "pix_recon": "train_pix_recon",
+        "val_pix_recon": "test_pix_recon",
         "val_kl": "test_kl",
     }
     for metric_key, label in metric_labels.items():
@@ -342,13 +358,54 @@ def build_baseline_relative_delta_frame(history: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def build_pixel_threshold_frame(history: pd.DataFrame) -> pd.DataFrame:
+    if history.empty or "val_pix_recon" not in history.columns:
+        return pd.DataFrame()
+    if "logical_epoch" not in history.columns:
+        history = history.copy()
+        history["logical_epoch"] = history["epoch"]
+
+    baseline = history[history["training_type"].eq("baseline")].copy()
+    if baseline.empty or not baseline["val_pix_recon"].notna().any():
+        return pd.DataFrame()
+    tau = 1.05 * float(baseline["val_pix_recon"].astype(float).min())
+
+    rows: list[dict[str, object]] = []
+    for (run_id, training_type, tactic), group in history.groupby(
+        ["run_id", "training_type", "shapley_tactic"]
+    ):
+        group = group.sort_values(["logical_epoch", "epoch"]).copy()
+        group["val_pix_recon"] = pd.to_numeric(
+            group["val_pix_recon"], errors="coerce"
+        )
+        reached = group[group["val_pix_recon"].le(tau)]
+        first = reached.iloc[0] if not reached.empty else None
+        rows.append(
+            {
+                "run_id": run_id,
+                "training_type": training_type,
+                "shapley_tactic": tactic,
+                "threshold_val_pix_recon": tau,
+                "reached_threshold": first is not None,
+                "epoch_to_threshold": None
+                if first is None
+                else int(first["logical_epoch"]),
+                "elapsed_sec_to_threshold": None
+                if first is None or "elapsed_train_sec" not in first
+                else float(first["elapsed_train_sec"]),
+                "best_val_pix_recon": float(group["val_pix_recon"].min()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def plot_baseline_relative_delta(delta: pd.DataFrame, out_dir: Path) -> None:
     if delta.empty:
         return
 
     metric_order = [
-        ("train_recon_base", "Train base reconstruction delta"),
-        ("test_recon_base", "Test base reconstruction delta"),
+        ("train_pix_recon", "Train pixel reconstruction delta"),
+        ("test_pix_recon", "Test pixel reconstruction delta"),
         ("test_kl", "Test KL delta"),
     ]
     present_metrics = [item for item in metric_order if item[0] in set(delta["metric"])]
@@ -436,7 +493,7 @@ def plot_baseline_relative_delta(delta: pd.DataFrame, out_dir: Path) -> None:
 
 
 def plot_shapley_weights(weights: pd.DataFrame, out_dir: Path) -> None:
-    if weights.empty or "weight_applied" not in weights.columns:
+    if weights.empty or "weight" not in weights.columns:
         return
     for run_id, g in weights.groupby("run_id"):
         g = g.sort_values(["sampling_phase", "block"])
@@ -444,17 +501,17 @@ def plot_shapley_weights(weights: pd.DataFrame, out_dir: Path) -> None:
         for block, block_g in g.groupby("block"):
             plt.plot(
                 block_g["sampling_phase"],
-                block_g["weight_applied"],
+                block_g["weight"],
                 marker="o",
                 linewidth=1.4,
                 label=str(block),
             )
         title = (
-            f"Shapley Block Weights "
+            f"Shapley Auxiliary Weights "
             f"({g['shapley_tactic'].iloc[0]}|{run_id[-6:]})"
         )
         plt.xlabel("sampling phase")
-        plt.ylabel("applied block weight")
+        plt.ylabel("auxiliary weight")
         plt.title(title)
         plt.ylim(bottom=0.0)
         plt.legend(fontsize=8, ncol=3)
@@ -547,10 +604,9 @@ def main() -> None:
         args.out / "recon_curves.png",
         args.out / "recon_train_curves.png",
         args.out / "recon_test_curves.png",
-        args.out / "recon_base_train_curves.png",
+        args.out / "pix_recon_train_curves.png",
+        args.out / "pix_recon_test_curves.png",
         args.out / "recon_base_test_curves.png",
-        args.out / "recon_unweighted_train_curves.png",
-        args.out / "recon_unweighted_test_curves.png",
         args.out / "baseline_relative_delta_curves.png",
         args.out / "kl_curves.png",
         args.out / "shapley_node_variance.png",
@@ -584,6 +640,8 @@ def main() -> None:
     shapley_phase_timing.to_csv(args.out / "shapley_phase_timing.csv", index=False)
     baseline_delta = build_baseline_relative_delta_frame(history)
     baseline_delta.to_csv(args.out / "baseline_relative_delta.csv", index=False)
+    pixel_threshold = build_pixel_threshold_frame(history)
+    pixel_threshold.to_csv(args.out / "pixel_threshold_times.csv", index=False)
 
     baseline_all = (
         summary_all[summary_all["training_type"] == "baseline"].copy()
@@ -597,19 +655,29 @@ def main() -> None:
     plot_single_metric_curves(
         history,
         args.out,
-        metric_key="recon_base",
-        title="Train Base Reconstruction Curves",
-        y_label="base block-normalized reconstruction loss",
-        file_name="recon_base_train_curves.png",
+        metric_key="pix_recon",
+        title="Train Pixel Reconstruction Curves",
+        y_label="pixel reconstruction loss",
+        file_name="pix_recon_train_curves.png",
         split_label="train",
         use_log_scale=True,
     )
     plot_single_metric_curves(
         history,
         args.out,
+        metric_key="val_pix_recon",
+        title="Test Pixel Reconstruction Curves",
+        y_label="pixel reconstruction loss",
+        file_name="pix_recon_test_curves.png",
+        split_label="test",
+        use_log_scale=True,
+    )
+    plot_single_metric_curves(
+        history,
+        args.out,
         metric_key="val_recon_base",
-        title="Test Base Reconstruction Curves",
-        y_label="base block-normalized reconstruction loss",
+        title="Test Static Pix-Aux Reconstruction Curves",
+        y_label="static pix-aux reconstruction loss",
         file_name="recon_base_test_curves.png",
         split_label="test",
         use_log_scale=True,

@@ -37,26 +37,33 @@ class BlockShapleyEstimator:
         *,
         model: nn.Module,
         block_index: FeatureBlockIndex,
+        value_block_index: FeatureBlockIndex | None = None,
         baseline_provider: BaselineProvider,
         sampler: AdaptiveNodeSampler | None = None,
         group_size: int = 16,
+        primary_block: str = "pix",
         eps: float = 1e-12,
     ) -> None:
         if group_size < 1:
             raise ValueError("group_size must be >= 1.")
         self.model = model
         self.block_index = block_index
+        self.value_block_index = value_block_index or block_index
+        if self.block_index.input_dim != self.value_block_index.input_dim:
+            raise ValueError("player and value block indices must share input_dim.")
         self.baseline_provider = baseline_provider
         self.node_index = CoalitionNodeIndex(block_index)
         self.sampler = sampler or AdaptiveNodeSampler(self.node_index)
         self.group_size = int(group_size)
+        if primary_block not in self.value_block_index.names:
+            raise ValueError(f"Unknown primary block: {primary_block}.")
+        self.primary_block = primary_block
+        self.primary_block_idx = self.value_block_index.names.index(primary_block)
         self.eps = float(eps)
         self.previous_reference_recon: float | None = None
-        self.value_feature_weights = block_index.equal_block_feature_weights()
 
     def to(self, device: torch.device | str) -> "BlockShapleyEstimator":
         self.sampler.to(device)
-        self.value_feature_weights = self.value_feature_weights.to(device)
         return self
 
     @torch.no_grad()
@@ -69,8 +76,10 @@ class BlockShapleyEstimator:
         x: torch.Tensor,
         x_hat: torch.Tensor,
     ) -> torch.Tensor:
-        weights = self.value_feature_weights.to(device=x.device, dtype=x.dtype)
-        return ((x_hat - x).pow(2) * weights).sum(dim=1)
+        block = self.value_block_index.blocks[self.primary_block_idx]
+        return (x_hat[:, block.start : block.stop] - x[:, block.start : block.stop]).pow(
+            2
+        ).mean(dim=1)
 
     @torch.no_grad()
     def reference_reconstruction_loss(
@@ -119,9 +128,9 @@ class BlockShapleyEstimator:
     ) -> SamplingEpochResult:
         if x.ndim != 2:
             raise ValueError("x must be a 2D tensor.")
-        if x.shape[1] != self.block_index.input_dim:
+        if x.shape[1] != self.value_block_index.input_dim:
             raise ValueError(
-                f"Expected input_dim {self.block_index.input_dim}, got {x.shape[1]}."
+                f"Expected input_dim {self.value_block_index.input_dim}, got {x.shape[1]}."
             )
         if labels is not None and labels.shape[0] != x.shape[0]:
             raise ValueError("labels must match x row count.")
@@ -178,9 +187,18 @@ class BlockShapleyEstimator:
                 x_original, labels=labels_batch, generator=generator
             )
             x_masked = apply_feature_mask(x_original, feature_masks, baseline)
+            full_player_mask = self.block_index.expand_block_mask(
+                torch.ones(
+                    (x_original.shape[0], self.block_index.n_blocks),
+                    dtype=torch.bool,
+                    device=device,
+                ),
+                device=device,
+            )
+            x_full_game = apply_feature_mask(x_original, full_player_mask, baseline)
 
             x_hat_masked = self.deterministic_reconstruction(x_masked)
-            x_hat_full = self.deterministic_reconstruction(x_original)
+            x_hat_full = self.deterministic_reconstruction(x_full_game)
             loss_masked = self.row_reconstruction_loss(x_original, x_hat_masked)
             loss_full = self.row_reconstruction_loss(x_original, x_hat_full)
             values = (loss_full - loss_masked) / (loss_full.abs() + self.eps)

@@ -37,6 +37,7 @@ class Trainer:
         callbacks: list[Callback] | None = None,
         scheduler: Any | None = None,
         scheduler_monitor: str = "loss",
+        scheduler_start_epoch: int = 0,
     ) -> None:
         self.model = model
         self.optimizer = optimizer
@@ -45,6 +46,7 @@ class Trainer:
         self.callbacks = CallbackList(callbacks or [])
         self.scheduler = scheduler
         self.scheduler_monitor = scheduler_monitor
+        self.scheduler_start_epoch = int(scheduler_start_epoch)
         self.state = TrainerState()
         self.model.to(self.device)
         self.loss_fn.to(self.device)
@@ -60,7 +62,8 @@ class Trainer:
             "loss": out.total.item(),
             "recon": out.recon.item(),
             "recon_base": out.recon_base.item(),
-            "recon_unweighted": out.recon_unweighted.item(),
+            "pix_recon": out.pix_recon.item(),
+            "aux_recon_base": out.aux_recon_base.item(),
             "kl": out.kl.item(),
         }
 
@@ -79,7 +82,8 @@ class Trainer:
             "loss": 0.0,
             "recon": 0.0,
             "recon_base": 0.0,
-            "recon_unweighted": 0.0,
+            "pix_recon": 0.0,
+            "aux_recon_base": 0.0,
             "kl": 0.0,
         }
         n_batches = 0
@@ -90,7 +94,8 @@ class Trainer:
             running["loss"] += out.total.item()
             running["recon"] += out.recon.item()
             running["recon_base"] += out.recon_base.item()
-            running["recon_unweighted"] += out.recon_unweighted.item()
+            running["pix_recon"] += out.pix_recon.item()
+            running["aux_recon_base"] += out.aux_recon_base.item()
             running["kl"] += out.kl.item()
             n_batches += 1
         if model_was_training:
@@ -116,7 +121,8 @@ class Trainer:
                 "loss": 0.0,
                 "recon": 0.0,
                 "recon_base": 0.0,
-                "recon_unweighted": 0.0,
+                "pix_recon": 0.0,
+                "aux_recon_base": 0.0,
                 "kl": 0.0,
             }
             n_batches = 0
@@ -142,7 +148,7 @@ class Trainer:
             self.state.history.append(epoch_logs)
             self.state.epoch_durations_sec.append(epoch_duration_sec)
             self.callbacks.call("on_epoch_end", self, epoch, logs=epoch_logs)
-            if self.scheduler is not None:
+            if self.scheduler is not None and epoch >= self.scheduler_start_epoch:
                 if self.scheduler.__class__.__name__ == "ReduceLROnPlateau":
                     monitor_key = self.scheduler_monitor
                     if monitor_key not in epoch_logs:
