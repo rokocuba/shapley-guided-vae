@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from models import VAE, VAEConfig
 from training import (
+    AuxLossWeightDecayCallback,
     BetaWarmupCallback,
     DynamicWeightedVAELoss,
     KLBetaSchedulerCallback,
@@ -83,6 +84,37 @@ def _make_auxiliary_player_index(block_index: FeatureBlockIndex) -> FeatureBlock
     return player_index
 
 
+def _append_aux_loss_weight_decay_callback(
+    callbacks: list[object],
+    *,
+    enabled: bool,
+    aux_loss_weight: float,
+    final_weight: float,
+    curve: str,
+    total_epochs: int,
+    beta_controller_name: str,
+    kl_target_warmup_epochs: int,
+) -> int | None:
+    if not enabled:
+        return None
+    if final_weight > aux_loss_weight:
+        raise ValueError(
+            "aux_loss_weight_decay_final must be <= aux_loss_weight when decay is enabled."
+        )
+    # With the KL-target controller, the target schedule is flat from this epoch on.
+    start_epoch = kl_target_warmup_epochs if beta_controller_name == "kl_target" else 0
+    callbacks.append(
+        AuxLossWeightDecayCallback(
+            initial_weight=aux_loss_weight,
+            final_weight=final_weight,
+            start_epoch=start_epoch,
+            total_epochs=total_epochs,
+            curve=curve,
+        )
+    )
+    return start_epoch
+
+
 def _make_run_data_info(
     *,
     bundle: object,
@@ -146,6 +178,9 @@ def run_baseline(
     normalize_features: bool = True,
     deterministic_latent: bool = False,
     aux_loss_weight: float = 0.2,
+    decay_aux_loss_weight_after_kl_warmup: bool = False,
+    aux_loss_weight_decay_final: float = 0.0,
+    aux_loss_weight_decay_curve: str = "linear",
     beta: float = 0.08,
     beta_controller: str = "kl_target",
     kl_target: float | None = 3.0,
@@ -232,7 +267,7 @@ def run_baseline(
             else max(float(kl_target_start), resolved_kl_target)
         )
         resolved_kl_target_warmup_epochs = (
-            max(1, int(round(0.7 * epochs)))
+            max(1, int(round(0.6 * epochs)))
             if kl_target_warmup_epochs is None
             else int(kl_target_warmup_epochs)
         )
@@ -266,6 +301,16 @@ def run_baseline(
         raise ValueError(
             "Unknown beta_controller. Supported values: 'kl_target' and 'warmup'."
         )
+    aux_loss_weight_decay_start_epoch = _append_aux_loss_weight_decay_callback(
+        callbacks,
+        enabled=decay_aux_loss_weight_after_kl_warmup,
+        aux_loss_weight=aux_loss_weight,
+        final_weight=aux_loss_weight_decay_final,
+        curve=aux_loss_weight_decay_curve,
+        total_epochs=epochs,
+        beta_controller_name=beta_controller_name,
+        kl_target_warmup_epochs=resolved_kl_target_warmup_epochs,
+    )
     trainer = Trainer(
         model=model,
         optimizer=optimizer,
@@ -334,6 +379,19 @@ def run_baseline(
             "normalize_features": normalize_features,
             "deterministic_latent": deterministic_latent,
             "aux_loss_weight": aux_loss_weight,
+            "aux_loss_weight_initial": aux_loss_weight,
+            "decay_aux_loss_weight_after_kl_warmup": decay_aux_loss_weight_after_kl_warmup,
+            "aux_loss_weight_decay_start_epoch": aux_loss_weight_decay_start_epoch,
+            "aux_loss_weight_decay_final": (
+                aux_loss_weight_decay_final
+                if decay_aux_loss_weight_after_kl_warmup
+                else aux_loss_weight
+            ),
+            "aux_loss_weight_decay_curve": (
+                aux_loss_weight_decay_curve
+                if decay_aux_loss_weight_after_kl_warmup
+                else None
+            ),
             "beta": beta,
             "beta_controller": beta_controller_name,
             "kl_target": resolved_kl_target,
@@ -419,6 +477,9 @@ def run_shapley_experiment(
     normalize_features: bool = True,
     deterministic_latent: bool = False,
     aux_loss_weight: float = 0.2,
+    decay_aux_loss_weight_after_kl_warmup: bool = False,
+    aux_loss_weight_decay_final: float = 0.0,
+    aux_loss_weight_decay_curve: str = "linear",
     beta: float = 0.08,
     beta_controller: str = "kl_target",
     kl_target: float | None = 3.0,
@@ -438,7 +499,7 @@ def run_shapley_experiment(
     shapley_tactic: str = "baseline",
     shapley_warmup_epochs: int = 100,
     shapley_min_sampling_phases: int = 5,
-    shapley_group_size: int = 16,
+    shapley_group_size: int = 32,
     shapley_sampling_batch_size: int = 512,
     shapley_all_nonpositive_policy: str = "error",
 ) -> list[dict[str, object]]:
@@ -508,7 +569,7 @@ def run_shapley_experiment(
             else max(float(kl_target_start), resolved_kl_target)
         )
         resolved_kl_target_warmup_epochs = (
-            max(1, int(round(0.7 * epochs)))
+            max(1, int(round(0.6 * epochs)))
             if kl_target_warmup_epochs is None
             else int(kl_target_warmup_epochs)
         )
@@ -542,6 +603,16 @@ def run_shapley_experiment(
         raise ValueError(
             "Unknown beta_controller. Supported values: 'kl_target' and 'warmup'."
         )
+    aux_loss_weight_decay_start_epoch = _append_aux_loss_weight_decay_callback(
+        callbacks,
+        enabled=decay_aux_loss_weight_after_kl_warmup,
+        aux_loss_weight=aux_loss_weight,
+        final_weight=aux_loss_weight_decay_final,
+        curve=aux_loss_weight_decay_curve,
+        total_epochs=epochs,
+        beta_controller_name=beta_controller_name,
+        kl_target_warmup_epochs=resolved_kl_target_warmup_epochs,
+    )
     trainer = Trainer(
         model=model,
         optimizer=optimizer,
@@ -624,6 +695,19 @@ def run_shapley_experiment(
             "normalize_features": normalize_features,
             "deterministic_latent": deterministic_latent,
             "aux_loss_weight": aux_loss_weight,
+            "aux_loss_weight_initial": aux_loss_weight,
+            "decay_aux_loss_weight_after_kl_warmup": decay_aux_loss_weight_after_kl_warmup,
+            "aux_loss_weight_decay_start_epoch": aux_loss_weight_decay_start_epoch,
+            "aux_loss_weight_decay_final": (
+                aux_loss_weight_decay_final
+                if decay_aux_loss_weight_after_kl_warmup
+                else aux_loss_weight
+            ),
+            "aux_loss_weight_decay_curve": (
+                aux_loss_weight_decay_curve
+                if decay_aux_loss_weight_after_kl_warmup
+                else None
+            ),
             "beta": beta,
             "beta_controller": beta_controller_name,
             "kl_target": resolved_kl_target,
@@ -729,6 +813,9 @@ def run_static_joint_experiment(
     normalize_features: bool = True,
     deterministic_latent: bool = False,
     aux_loss_weight: float = 0.2,
+    decay_aux_loss_weight_after_kl_warmup: bool = False,
+    aux_loss_weight_decay_final: float = 0.0,
+    aux_loss_weight_decay_curve: str = "linear",
     beta: float = 0.08,
     beta_controller: str = "kl_target",
     kl_target: float | None = 3.0,
@@ -817,7 +904,7 @@ def run_static_joint_experiment(
             else max(float(kl_target_start), resolved_kl_target)
         )
         resolved_kl_target_warmup_epochs = (
-            max(1, int(round(0.7 * epochs)))
+            max(1, int(round(0.6 * epochs)))
             if kl_target_warmup_epochs is None
             else int(kl_target_warmup_epochs)
         )
@@ -851,6 +938,16 @@ def run_static_joint_experiment(
         raise ValueError(
             "Unknown beta_controller. Supported values: 'kl_target' and 'warmup'."
         )
+    aux_loss_weight_decay_start_epoch = _append_aux_loss_weight_decay_callback(
+        callbacks,
+        enabled=decay_aux_loss_weight_after_kl_warmup,
+        aux_loss_weight=aux_loss_weight,
+        final_weight=aux_loss_weight_decay_final,
+        curve=aux_loss_weight_decay_curve,
+        total_epochs=epochs,
+        beta_controller_name=beta_controller_name,
+        kl_target_warmup_epochs=resolved_kl_target_warmup_epochs,
+    )
     trainer = Trainer(
         model=model,
         optimizer=optimizer,
@@ -914,6 +1011,19 @@ def run_static_joint_experiment(
             "normalize_features": normalize_features,
             "deterministic_latent": deterministic_latent,
             "aux_loss_weight": aux_loss_weight,
+            "aux_loss_weight_initial": aux_loss_weight,
+            "decay_aux_loss_weight_after_kl_warmup": decay_aux_loss_weight_after_kl_warmup,
+            "aux_loss_weight_decay_start_epoch": aux_loss_weight_decay_start_epoch,
+            "aux_loss_weight_decay_final": (
+                aux_loss_weight_decay_final
+                if decay_aux_loss_weight_after_kl_warmup
+                else aux_loss_weight
+            ),
+            "aux_loss_weight_decay_curve": (
+                aux_loss_weight_decay_curve
+                if decay_aux_loss_weight_after_kl_warmup
+                else None
+            ),
             "beta": beta,
             "beta_controller": beta_controller_name,
             "kl_target": resolved_kl_target,
@@ -998,6 +1108,21 @@ def main() -> None:
     parser.add_argument("--no-normalize-features", action="store_true")
     parser.add_argument("--deterministic-latent", action="store_true")
     parser.add_argument("--aux-loss-weight", type=float, default=0.2)
+    parser.add_argument(
+        "--decay-aux-loss-weight-after-kl-warmup",
+        action="store_true",
+        help=(
+            "Decay --aux-loss-weight after the resolved KL target warm-up "
+            "epoch; with default KL-target settings this starts at 0.6 * epochs."
+        ),
+    )
+    parser.add_argument("--aux-loss-weight-decay-final", type=float, default=0.0)
+    parser.add_argument(
+        "--aux-loss-weight-decay-curve",
+        type=str,
+        choices=("linear", "cosine", "exponential"),
+        default="linear",
+    )
     parser.add_argument("--beta", type=float, default=0.08)
     parser.add_argument(
         "--beta-controller",
@@ -1047,7 +1172,7 @@ def main() -> None:
         type=int,
         default=5,
     )
-    parser.add_argument("--shapley-group-size", type=int, default=16)
+    parser.add_argument("--shapley-group-size", type=int, default=32)
     parser.add_argument("--shapley-sampling-batch-size", type=int, default=512)
     parser.add_argument(
         "--shapley-all-nonpositive-policy",
@@ -1082,6 +1207,9 @@ def main() -> None:
             normalize_features=not args.no_normalize_features,
             deterministic_latent=args.deterministic_latent,
             aux_loss_weight=args.aux_loss_weight,
+            decay_aux_loss_weight_after_kl_warmup=args.decay_aux_loss_weight_after_kl_warmup,
+            aux_loss_weight_decay_final=args.aux_loss_weight_decay_final,
+            aux_loss_weight_decay_curve=args.aux_loss_weight_decay_curve,
             beta=args.beta,
             beta_controller=args.beta_controller,
             kl_target=args.kl_target,
@@ -1130,6 +1258,9 @@ def main() -> None:
             normalize_features=not args.no_normalize_features,
             deterministic_latent=args.deterministic_latent,
             aux_loss_weight=args.aux_loss_weight,
+            decay_aux_loss_weight_after_kl_warmup=args.decay_aux_loss_weight_after_kl_warmup,
+            aux_loss_weight_decay_final=args.aux_loss_weight_decay_final,
+            aux_loss_weight_decay_curve=args.aux_loss_weight_decay_curve,
             beta=args.beta,
             beta_controller=args.beta_controller,
             kl_target=args.kl_target,
@@ -1168,6 +1299,9 @@ def main() -> None:
             normalize_features=not args.no_normalize_features,
             deterministic_latent=args.deterministic_latent,
             aux_loss_weight=args.aux_loss_weight,
+            decay_aux_loss_weight_after_kl_warmup=args.decay_aux_loss_weight_after_kl_warmup,
+            aux_loss_weight_decay_final=args.aux_loss_weight_decay_final,
+            aux_loss_weight_decay_curve=args.aux_loss_weight_decay_curve,
             beta=args.beta,
             beta_controller=args.beta_controller,
             kl_target=args.kl_target,

@@ -116,6 +116,71 @@ class BetaWarmupCallback(Callback):
         trainer.loss_fn.beta = float(self.beta_for_epoch(epoch))
 
 
+class AuxLossWeightDecayCallback(Callback):
+    def __init__(
+        self,
+        initial_weight: float,
+        final_weight: float,
+        start_epoch: int,
+        total_epochs: int,
+        curve: str = "linear",
+    ) -> None:
+        curve = curve.strip().lower()
+        allowed = {"linear", "cosine", "exponential"}
+        if curve not in allowed:
+            raise ValueError(
+                f"Unknown aux loss weight decay curve '{curve}'. "
+                f"Allowed: {sorted(allowed)}"
+            )
+        if initial_weight < 0.0:
+            raise ValueError("initial aux loss weight must be >= 0.")
+        if final_weight < 0.0:
+            raise ValueError("final aux loss weight must be >= 0.")
+        if start_epoch < 0:
+            raise ValueError("aux loss weight decay start_epoch must be >= 0.")
+        if total_epochs < 1:
+            raise ValueError("total_epochs must be >= 1.")
+        self.initial_weight = float(initial_weight)
+        self.final_weight = float(final_weight)
+        self.start_epoch = int(start_epoch)
+        self.total_epochs = int(total_epochs)
+        self.curve = curve
+
+    def weight_for_epoch(self, epoch: int) -> float:
+        if epoch < self.start_epoch or self.start_epoch >= self.total_epochs:
+            return self.initial_weight
+        end_epoch = self.total_epochs - 1
+        if end_epoch <= self.start_epoch:
+            progress = 1.0
+        else:
+            progress = (epoch - self.start_epoch) / float(end_epoch - self.start_epoch)
+            progress = max(0.0, min(1.0, progress))
+        if self.curve == "cosine":
+            progress = 0.5 - 0.5 * math.cos(math.pi * progress)
+        elif self.curve == "exponential":
+            rate = 5.0
+            progress = (1.0 - math.exp(-rate * progress)) / (1.0 - math.exp(-rate))
+        return self.initial_weight + (self.final_weight - self.initial_weight) * progress
+
+    def on_train_begin(self, trainer: Any, logs: dict[str, Any] | None = None) -> None:
+        trainer.loss_fn.aux_loss_weight = float(self.weight_for_epoch(0))
+
+    def on_epoch_begin(
+        self, trainer: Any, epoch: int, logs: dict[str, Any] | None = None
+    ) -> None:
+        if logs is not None and not bool(logs.get("advance_epoch_controls", True)):
+            return
+        trainer.loss_fn.aux_loss_weight = float(self.weight_for_epoch(epoch))
+
+    def on_epoch_end(
+        self, trainer: Any, epoch: int, logs: dict[str, Any] | None = None
+    ) -> None:
+        if logs is None:
+            return
+        logs["aux_loss_weight"] = float(trainer.loss_fn.aux_loss_weight)
+        logs["aux_loss_weight_decay_active"] = bool(epoch >= self.start_epoch)
+
+
 class KLBetaSchedulerCallback(Callback):
     def __init__(
         self,

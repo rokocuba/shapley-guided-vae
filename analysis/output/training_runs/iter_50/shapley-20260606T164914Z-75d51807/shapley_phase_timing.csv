@@ -1,0 +1,7 @@
+epoch_start,epoch_end,phase,cycle,duration_sec,num_batches,num_samples,num_node_groups,tactic
+49,49,B,0,0.1627598999912152,,1024,32,conditional
+69,69,B,1,0.08561909999116324,,1600,50,conditional
+89,89,B,2,0.08032940000703093,,1600,50,conditional
+109,109,B,3,0.0801973000052385,,1600,50,conditional
+129,129,B,4,0.08025430000270717,,1600,50,conditional
+169,169,B,5,0.08409750000282656,,1600,50,conditional

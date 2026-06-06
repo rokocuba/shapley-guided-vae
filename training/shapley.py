@@ -127,6 +127,7 @@ def _train_one_epoch(
             "advance_epoch_controls": advance_epoch_controls,
             "dynamic_aux_step": aux_weights is not None,
             "beta": float(trainer.loss_fn.beta),
+            "aux_loss_weight": float(trainer.loss_fn.aux_loss_weight),
             "lr": float(trainer.optimizer.param_groups[0]["lr"]),
             "epoch_duration_sec": float(epoch_duration_sec),
             "elapsed_train_sec": float(elapsed_train_sec),
@@ -234,7 +235,9 @@ def run_shapley_training(
             }
         )
         for row in estimator.sampler.stats.snapshot_rows(probabilities):
-            row.update({"epoch": epoch, "cycle": cycle, "sampling_phase": sampling_phase})
+            row.update(
+                {"epoch": epoch, "cycle": cycle, "sampling_phase": sampling_phase}
+            )
             result.node_stat_rows.append(row)
 
         weights = auxiliary_shapley_weights(
@@ -259,7 +262,9 @@ def run_shapley_training(
 
         trainer.loss_fn.reset_aux_weights()
         cycle += 1
-    trainer.callbacks.call("on_train_end", trainer, logs={"history": trainer.state.history})
+    trainer.callbacks.call(
+        "on_train_end", trainer, logs={"history": trainer.state.history}
+    )
     trainer.state.train_duration_sec = perf_counter() - train_started
     trainer.state.train_ended_at = datetime.now(timezone.utc).isoformat()
     return result
@@ -304,7 +309,9 @@ def run_static_joint_training(
         logs["sampling_phase"] = 0
         logs["static_joint_weights"] = True
     trainer.loss_fn.reset_aux_weights()
-    trainer.callbacks.call("on_train_end", trainer, logs={"history": trainer.state.history})
+    trainer.callbacks.call(
+        "on_train_end", trainer, logs={"history": trainer.state.history}
+    )
     trainer.state.train_duration_sec = perf_counter() - train_started
     trainer.state.train_ended_at = datetime.now(timezone.utc).isoformat()
     return trainer.state.history

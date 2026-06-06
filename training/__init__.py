@@ -1,4 +1,9 @@
-from .callbacks import BetaWarmupCallback, Callback, KLBetaSchedulerCallback
+from .callbacks import (
+    AuxLossWeightDecayCallback,
+    BetaWarmupCallback,
+    Callback,
+    KLBetaSchedulerCallback,
+)
 from .evaluation import plot_feature_difference_distributions
 from .loss import DynamicWeightedVAELoss
 from .results import (
@@ -18,6 +23,7 @@ from .trainer import Trainer
 
 __all__ = [
     "Callback",
+    "AuxLossWeightDecayCallback",
     "BetaWarmupCallback",
     "KLBetaSchedulerCallback",
     "DynamicWeightedVAELoss",

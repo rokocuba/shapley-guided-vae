@@ -1,0 +1,7 @@
+hook,seconds,calls
+KLBetaSchedulerCallback.on_train_begin,1.4099998224992305e-05,1
+KLBetaSchedulerCallback.on_epoch_begin,0.0003051000021514483,200
+KLBetaSchedulerCallback.on_batch_begin,0.0022700000990880653,1400
+KLBetaSchedulerCallback.on_batch_end,0.0030295000760816038,1400
+KLBetaSchedulerCallback.on_epoch_end,0.002667199994903058,200
+KLBetaSchedulerCallback.on_train_end,1.6999983927235007e-06,1

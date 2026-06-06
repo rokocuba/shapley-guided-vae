@@ -141,6 +141,7 @@ class Trainer:
             epoch_duration_sec = perf_counter() - epoch_started
             elapsed_train_sec += epoch_duration_sec
             epoch_logs["beta"] = float(self.loss_fn.beta)
+            epoch_logs["aux_loss_weight"] = float(self.loss_fn.aux_loss_weight)
             epoch_logs["lr"] = float(self.optimizer.param_groups[0]["lr"])
             epoch_logs["logical_epoch"] = epoch
             epoch_logs["epoch_duration_sec"] = float(epoch_duration_sec)

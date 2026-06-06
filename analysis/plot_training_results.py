@@ -14,7 +14,6 @@ if str(ROOT) not in sys.path:
 
 from training import load_training_runs
 
-
 CURRENT_SHAPLEY_PLAYERS = ["fou", "fac", "kar", "zer", "mor"]
 
 
@@ -68,9 +67,7 @@ def build_summary_frame(
                 "final_val_recon": r.final_metrics.get("val_recon"),
                 "final_val_recon_base": r.final_metrics.get("val_recon_base"),
                 "final_val_pix_recon": r.final_metrics.get("val_pix_recon"),
-                "final_val_aux_recon_base": r.final_metrics.get(
-                    "val_aux_recon_base"
-                ),
+                "final_val_aux_recon_base": r.final_metrics.get("val_aux_recon_base"),
                 "final_val_kl": r.final_metrics.get("val_kl"),
             }
         )
@@ -316,9 +313,7 @@ def build_baseline_relative_delta_frame(history: pd.DataFrame) -> pd.DataFrame:
         .groupby("logical_epoch", as_index=False)
         .tail(1)
     )
-    baseline_metrics = baseline[
-        ["logical_epoch", *metric_keys]
-    ].rename(
+    baseline_metrics = baseline[["logical_epoch", *metric_keys]].rename(
         columns={
             "pix_recon": "baseline_pix_recon",
             "val_pix_recon": "baseline_val_pix_recon",
@@ -375,9 +370,7 @@ def build_pixel_threshold_frame(history: pd.DataFrame) -> pd.DataFrame:
         ["run_id", "training_type", "shapley_tactic"]
     ):
         group = group.sort_values(["logical_epoch", "epoch"]).copy()
-        group["val_pix_recon"] = pd.to_numeric(
-            group["val_pix_recon"], errors="coerce"
-        )
+        group["val_pix_recon"] = pd.to_numeric(group["val_pix_recon"], errors="coerce")
         reached = group[group["val_pix_recon"].le(tau)]
         first = reached.iloc[0] if not reached.empty else None
         rows.append(
@@ -387,12 +380,14 @@ def build_pixel_threshold_frame(history: pd.DataFrame) -> pd.DataFrame:
                 "shapley_tactic": tactic,
                 "threshold_val_pix_recon": tau,
                 "reached_threshold": first is not None,
-                "epoch_to_threshold": None
-                if first is None
-                else int(first["logical_epoch"]),
-                "elapsed_sec_to_threshold": None
-                if first is None or "elapsed_train_sec" not in first
-                else float(first["elapsed_train_sec"]),
+                "epoch_to_threshold": (
+                    None if first is None else int(first["logical_epoch"])
+                ),
+                "elapsed_sec_to_threshold": (
+                    None
+                    if first is None or "elapsed_train_sec" not in first
+                    else float(first["elapsed_train_sec"])
+                ),
                 "best_val_pix_recon": float(group["val_pix_recon"].min()),
             }
         )
@@ -524,7 +519,9 @@ def plot_shapley_node_variance(node_stats: pd.DataFrame, out_dir: Path) -> None:
     if node_stats.empty or "variance" not in node_stats.columns:
         return
     summary = (
-        node_stats.groupby(["run_id", "shapley_tactic", "sampling_phase"], as_index=False)
+        node_stats.groupby(
+            ["run_id", "shapley_tactic", "sampling_phase"], as_index=False
+        )
         .agg(
             mean_variance=("variance", "mean"),
             max_variance=("variance", "max"),
@@ -593,7 +590,7 @@ def main() -> None:
         "--runs", type=Path, default=Path("analysis/output/training_runs")
     )
     parser.add_argument(
-        "--out", type=Path, default=Path("analysis/output/training_plots")
+        "--out", type=Path, default=Path("analysis/output/training_runs")
     )
     parser.add_argument("--all-runs", action="store_true")
     args = parser.parse_args()

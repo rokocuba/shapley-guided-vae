@@ -40,7 +40,7 @@ class BlockShapleyEstimator:
         value_block_index: FeatureBlockIndex | None = None,
         baseline_provider: BaselineProvider,
         sampler: AdaptiveNodeSampler | None = None,
-        group_size: int = 16,
+        group_size: int = 32,
         primary_block: str = "pix",
         eps: float = 1e-12,
     ) -> None:

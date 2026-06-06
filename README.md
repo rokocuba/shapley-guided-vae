@@ -6,14 +6,14 @@ BSc thesis code for dynamic auxiliary reconstruction scaling in a Variational Au
 
 Dataset: UCI Multiple Features (`mfeat`), 2000 digit samples, 649 features.
 
-| Block | Meaning | Features | Role |
-| --- | --- | ---: | --- |
-| `fou` | Fourier coefficients | 76 | encoder input, auxiliary target |
-| `fac` | Profile correlations | 216 | encoder input, auxiliary target |
-| `kar` | Karhunen-Loeve coefficients | 64 | encoder input, auxiliary target |
-| `pix` | Pixel averages | 240 | encoder input, primary target |
-| `zer` | Zernike moments | 47 | encoder input, auxiliary target |
-| `mor` | Morphological features | 6 | encoder input, auxiliary target |
+| Block | Meaning                     | Features | Role                            |
+| ----- | --------------------------- | -------: | ------------------------------- |
+| `fou` | Fourier coefficients        |       76 | encoder input, auxiliary target |
+| `fac` | Profile correlations        |      216 | encoder input, auxiliary target |
+| `kar` | Karhunen-Loeve coefficients |       64 | encoder input, auxiliary target |
+| `pix` | Pixel averages              |      240 | encoder input, primary target   |
+| `zer` | Zernike moments             |       47 | encoder input, auxiliary target |
+| `mor` | Morphological features      |        6 | encoder input, auxiliary target |
 
 The encoder consumes all 649 normalized features. The decoder has one shared trunk and six output heads, concatenated back to a flat 649-vector for compatibility.
 
@@ -27,17 +27,26 @@ L = pix_recon
 
 Default `aux_loss_weight` is `0.2`. Static baseline uses `w_g = 1/5`. Shapley runs estimate five auxiliary-block Shapley values from a pixel-only payoff and distribute one auxiliary weight budget over the five auxiliary losses. Pixel is the target, not a Shapley player, and its loss stays fixed at coefficient `1`.
 
+Optional lambda decay:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --decay-aux-loss-weight-after-kl-warmup
+```
+
+This keeps `aux_loss_weight` fixed until the resolved KL target warm-up epoch, then decays it to `--aux-loss-weight-decay-final` over the remaining epochs. Use `--aux-loss-weight-decay-curve exponential` for a faster early drop. With the default KL-target controller, the decay starts at `round(6 * epochs)`.
+
 ## Defaults
 
-| Parameter | Value |
-| --- | ---: |
-| Epochs | `2000` |
-| Batch size | `256` |
-| Hidden dims | `1024,1024` |
-| Latent dim | `5` |
-| KL target | `3.0` |
-| Warm-up before Shapley sampling | `100` epochs |
-| Dynamic activation delay | `5` sampling phases |
+| Parameter                       |                 Value |
+| ------------------------------- | --------------------: |
+| Epochs                          |                `2000` |
+| Batch size                      |                 `256` |
+| Hidden dims                     |           `1024,1024` |
+| Latent dim                      |                   `5` |
+| KL target                       |                 `3.0` |
+| KL target warm-up               | `round(0.6 * epochs)` |
+| Warm-up before Shapley sampling |          `100` epochs |
+| Dynamic activation delay        |   `5` sampling phases |
 
 ## Run
 

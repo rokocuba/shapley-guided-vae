@@ -335,9 +335,7 @@ def plot_feature_baselines(
         title = f"{dataset_name} feature-group baseline error"
 
     baseline_cols = [
-        col
-        for col in ["global_mean", "digit_class_mean"]
-        if col in pivot.columns
+        col for col in ["global_mean", "digit_class_mean"] if col in pivot.columns
     ]
     pca_cols = sorted(
         [col for col in pivot.columns if _extract_pca_dim(col) is not None],
@@ -391,7 +389,7 @@ def main() -> None:
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("analysis/output/training_plots_beta040_warm100_beefy"),
+        default=Path("analysis/output/training_runs"),
     )
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--split-seed", type=int, default=42)
@@ -509,9 +507,7 @@ def main() -> None:
     plot_feature_baselines(
         feature_df, args.out_dir / "mean_baseline_feature_mse.png", "mfeat"
     )
-    plot_vae_kl_comparison(
-        comparison, args.out_dir / "vae_kl_comparison.png", "mfeat"
-    )
+    plot_vae_kl_comparison(comparison, args.out_dir / "vae_kl_comparison.png", "mfeat")
     print(f"saved={args.out_dir} pca_dims={pca_dims}")
 
 

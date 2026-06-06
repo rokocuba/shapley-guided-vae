@@ -1,0 +1,7 @@
+epoch_start,epoch_end,phase,cycle,duration_sec,num_batches,num_samples,num_node_groups,tactic
+49,49,B,0,0.1305679000033706,,1024,32,marginal
+69,69,B,1,0.058030100000905804,,1600,50,marginal
+89,89,B,2,0.04783010000028298,,1600,50,marginal
+109,109,B,3,0.04889960000218707,,1600,50,marginal
+129,129,B,4,0.05603780000092229,,1600,50,marginal
+169,169,B,5,0.04976080000051297,,1600,50,marginal

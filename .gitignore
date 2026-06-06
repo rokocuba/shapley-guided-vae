@@ -8,5 +8,6 @@ reports/*
 *.pyo
 *.pyd
 AGENTS.
-analysis/*
-*.ps1
+*.pt
+analysis/output/*
+!analysis/output/training_runs/
