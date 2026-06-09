@@ -8,7 +8,7 @@ if (-not (Test-Path -LiteralPath $python)) {
 }
 
 $numIterations = 50
-$baseOutDir = 'analysis/output/training_runs'
+$baseOutDir = 'analysis/output/training_runs_lowered_epsilon'
 $common = @(
     '--epochs', '200',
     '--batch-size', '256',
@@ -16,11 +16,11 @@ $common = @(
     '--latent-dim', '8',
     '--kl-target', '5.00',
     '--aux-loss-weight', '0.8',
-    '--lr-plateau-factor', '0.7',
+    '--lr-plateau-factor', '0.5',
     '--lr-scheduler-monitor', 'pix_recon',
-    '--lr-plateau-patience', '4',
+    '--lr-plateau-patience', '3',
     '--lr', '1e-3',
-    '--lr-min', '1e-7'
+    '--lr-min', '1e-5'
 )
 $shapley = @(
     '--shapley-warmup-epochs', '50',

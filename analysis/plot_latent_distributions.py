@@ -86,7 +86,9 @@ def _collect_latent_arrays(
     device: torch.device,
     sample_seed: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    loader = DataLoader(torch.from_numpy(x_scaled), batch_size=batch_size, shuffle=False)
+    loader = DataLoader(
+        torch.from_numpy(x_scaled), batch_size=batch_size, shuffle=False
+    )
     mu_batches: list[np.ndarray] = []
     logvar_batches: list[np.ndarray] = []
     z_batches: list[np.ndarray] = []
@@ -103,7 +105,7 @@ def _collect_latent_arrays(
                 z = mu
             else:
                 std = torch.exp(0.5 * logvar)
-                z = mu + std * torch.randn_like(std)
+                z = mu + 0.01 * std * torch.randn_like(std)
             mu_batches.append(mu.detach().cpu().numpy())
             logvar_batches.append(logvar.detach().cpu().numpy())
             z_batches.append(z.detach().cpu().numpy())
@@ -176,7 +178,9 @@ def _plot_histograms(
         ax.hist(column, bins=bins, color=color, alpha=0.85)
         ax.axvline(0.0, color="black", linewidth=0.9, alpha=0.6)
         ax.axvline(column.mean(), color="crimson", linestyle="--", linewidth=1.0)
-        ax.set_title(f"dim {dim_index} | mean={column.mean():.3f} std={column.std():.3f}")
+        ax.set_title(
+            f"dim {dim_index} | mean={column.mean():.3f} std={column.std():.3f}"
+        )
         ax.set_xlabel("value")
         ax.set_ylabel("count")
 

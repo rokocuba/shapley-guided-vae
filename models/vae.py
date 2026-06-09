@@ -64,7 +64,7 @@ class VAE(nn.Module):
         if self.config.deterministic_latent:
             return mu
         std = torch.exp(0.5 * logvar)
-        return mu + std * torch.randn_like(std)
+        return mu + 0.01 * std * torch.randn_like(std)
 
     def forward(
         self, x: torch.Tensor
