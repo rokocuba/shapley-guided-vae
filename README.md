@@ -1,7 +1,8 @@
 # Shapley-Guided VAE
 
 > Dynamic Scaling of Reconstruction Error in Variational Autoencoders using Shapley Values\
-> BSc thesis no. 2381, June 2026. Roko Čubrić, FER, University of Zagreb. Mentor: prof. dr. sc. Tomislav Burić.
+> BSc thesis no. 2381, June 2026. Roko Čubrić, FER, University of Zagreb.
+> Mentor: prof. dr. sc. Tomislav Burić.
 
 A model trained on several objectives requires a rule for how much each objective counts. In practice that rule is a set of constants, obtained by grid search and then held fixed for the remainder of the run. Two problems follow from it. The search cost grows with the number of tasks, and a constant assumes that the split which is correct at epoch 10 is still correct at epoch 150.
 
